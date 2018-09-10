@@ -10,7 +10,6 @@ Written by Waleed Abdulla
 """
 
 import os
-import random
 import datetime
 import re
 import math
@@ -18,7 +17,6 @@ import logging
 from collections import OrderedDict
 import multiprocessing
 import numpy as np
-import skimage.transform
 import tensorflow as tf
 import keras
 import keras.backend as K
@@ -65,7 +63,8 @@ class BatchNorm(KL.BatchNormalization):
         Note about training values:
             None: Train BN layers. This is the normal mode
             False: Freeze BN layers. Good when batch size is small
-            True: (don't use). Set layer in training mode even when making inferences
+            True: (don't use). Set layer in training mode even when making
+                inferences
         """
         return super(self.__class__, self).call(inputs, training=training)
 
@@ -98,7 +97,8 @@ def identity_block(input_tensor, kernel_size, filters, stage, block,
     """The identity_block is the block that has no conv layer at shortcut
     # Arguments
         input_tensor: input tensor
-        kernel_size: default 3, the kernel size of middle conv layer at main path
+        kernel_size: default 3, the kernel size of middle conv layer at main
+            path
         filters: list of integers, the nb_filters of 3 conv layer at main path
         stage: integer, current stage label, used for generating layer names
         block: 'a','b'..., current block label, used for generating layer names
@@ -133,13 +133,15 @@ def conv_block(input_tensor, kernel_size, filters, stage, block,
     """conv_block is the block that has a conv layer at shortcut
     # Arguments
         input_tensor: input tensor
-        kernel_size: default 3, the kernel size of middle conv layer at main path
+        kernel_size: default 3, the kernel size of middle conv layer at main
+            path
         filters: list of integers, the nb_filters of 3 conv layer at main path
         stage: integer, current stage label, used for generating layer names
         block: 'a','b'..., current block label, used for generating layer names
         use_bias: Boolean. To use or not use a bias in conv layers.
         train_bn: Boolean. Train or freeze Batch Norm layers
-    Note that from stage 3, the first conv layer at main path is with subsample=(2,2)
+    Note that from stage 3, the first conv layer at main path is with
+    subsample=(2,2)
     And the shortcut should have subsample=(2,2) as well
     """
     nb_filter1, nb_filter2, nb_filter3 = filters
@@ -292,9 +294,10 @@ class ProposalLayer(KE.Layer):
                                    self.config.IMAGES_PER_GPU)
         deltas = utils.batch_slice([deltas, ix], lambda x, y: tf.gather(x, y),
                                    self.config.IMAGES_PER_GPU)
-        pre_nms_anchors = utils.batch_slice([anchors, ix], lambda a, x: tf.gather(a, x),
-                                    self.config.IMAGES_PER_GPU,
-                                    names=["pre_nms_anchors"])
+        pre_nms_anchors = utils.batch_slice([anchors, ix],
+                                            lambda a, x: tf.gather(a, x),
+                                            self.config.IMAGES_PER_GPU,
+                                            names=["pre_nms_anchors"])
 
         # Apply deltas to anchors to get refined anchors.
         # [batch, N, (y1, x1, y2, x2)]
@@ -679,7 +682,7 @@ def refine_detections_graph(rois, probs, deltas, window, config):
     # 1. Prepare variables
     pre_nms_class_ids = tf.gather(class_ids, keep)
     pre_nms_scores = tf.gather(class_scores, keep)
-    pre_nms_rois = tf.gather(refined_rois,   keep)
+    pre_nms_rois = tf.gather(refined_rois, keep)
     unique_pre_nms_class_ids = tf.unique(pre_nms_class_ids)[0]
 
     def nms_keep_map(class_id):
@@ -688,10 +691,10 @@ def refine_detections_graph(rois, probs, deltas, window, config):
         ixs = tf.where(tf.equal(pre_nms_class_ids, class_id))[:, 0]
         # Apply NMS
         class_keep = tf.image.non_max_suppression(
-                tf.gather(pre_nms_rois, ixs),
-                tf.gather(pre_nms_scores, ixs),
-                max_output_size=config.DETECTION_MAX_INSTANCES,
-                iou_threshold=config.DETECTION_NMS_THRESHOLD)
+            tf.gather(pre_nms_rois, ixs),
+            tf.gather(pre_nms_scores, ixs),
+            max_output_size=config.DETECTION_MAX_INSTANCES,
+            iou_threshold=config.DETECTION_NMS_THRESHOLD)
         # Map indices
         class_keep = tf.gather(keep, tf.gather(ixs, class_keep))
         # Pad with -1 so returned tensors have the same shape
@@ -724,8 +727,7 @@ def refine_detections_graph(rois, probs, deltas, window, config):
     detections = tf.concat([
         tf.gather(refined_rois, keep),
         tf.to_float(tf.gather(class_ids, keep))[..., tf.newaxis],
-        tf.gather(class_scores, keep)[..., tf.newaxis]
-        ], axis=1)
+        tf.gather(class_scores, keep)[..., tf.newaxis]], axis=1)
 
     # Pad with zeros if detections < DETECTION_MAX_INSTANCES
     gap = config.DETECTION_MAX_INSTANCES - tf.shape(detections)[0]
@@ -759,7 +761,6 @@ class DetectionLayer(KE.Layer):
         m = parse_image_meta_graph(image_meta)
         image_shape = m['image_shape'][0]
         window = norm_boxes_graph(m['window'], image_shape[:2])
-        
         # Run detection refinement graph on each item in the batch
         detections_batch = utils.batch_slice(
             [rois, mrcnn_class, mrcnn_bbox, window],
@@ -1056,7 +1057,8 @@ def load_image_gt(dataset, config, image_id, augment=False, augmentation=None,
 
     augment: (deprecated. Use augmentation instead). If true, apply random
         image augmentation. Currently, only horizontal flipping is offered.
-    augmentation: Optional. An imgaug (https://github.com/aleju/imgaug) augmentation.
+    augmentation: Optional. An imgaug (https://github.com/aleju/imgaug)
+        augmentation.
         For example, passing imgaug.augmenters.Fliplr(0.5) flips images
         right/left 50% of the time.
 
@@ -1102,7 +1104,8 @@ def build_detection_targets(rpn_rois, gt_class_ids, gt_boxes, config):
     Returns:
     rois: [TRAIN_ROIS_PER_IMAGE, (y1, x1, y2, x2)]
     class_ids: [TRAIN_ROIS_PER_IMAGE]. Integer class IDs.
-    bboxes: [TRAIN_ROIS_PER_IMAGE, NUM_CLASSES, (y, x, log(h), log(w))]. Class-specific
+    bboxes: [TRAIN_ROIS_PER_IMAGE, NUM_CLASSES, (y, x, log(h), log(w))].
+        Class-specific
             bbox refinements.
     """
     assert rpn_rois.shape[0] > 0
@@ -1145,7 +1148,8 @@ def build_detection_targets(rpn_rois, gt_class_ids, gt_boxes, config):
     fg_ids = np.where(rpn_roi_iou_max > 0.5)[0]
 
     # Negative ROIs are those with max IoU 0.1-0.5 (hard example mining)
-    # TODO: To hard example mine or not to hard example mine, that's the question
+    # TODO: To hard example mine or not to hard example mine, that's the
+    # question
     # bg_ids = np.where((rpn_roi_iou_max >= 0.1) & (rpn_roi_iou_max < 0.5))[0]
     bg_ids = np.where(rpn_roi_iou_max < 0.5)[0]
 
@@ -1192,7 +1196,8 @@ def build_detection_targets(rpn_rois, gt_class_ids, gt_boxes, config):
     rpn_roi_gt_boxes[keep_bg_ids, :] = 0
     rpn_roi_gt_class_ids[keep_bg_ids] = 0
 
-    # For each kept ROI, assign a class_id, and for FG ROIs also add bbox refinement.
+    # For each kept ROI, assign a class_id, and for FG ROIs also add bbox
+    # refinement.
     rois = rpn_rois[keep]
     roi_gt_boxes = rpn_roi_gt_boxes[keep]
     roi_gt_class_ids = rpn_roi_gt_class_ids[keep]
@@ -1407,9 +1412,9 @@ def generate_random_rois(image_shape, count, gt_class_ids, gt_boxes):
     return rois
 
 
-def data_generator(dataset, config, shuffle=True, augment=False, augmentation=None,
-                   random_rois=0, batch_size=1, detection_targets=False,
-                   no_augmentation_sources=None):
+def data_generator(dataset, config, shuffle=True, augment=False,
+                   augmentation=None, random_rois=0, batch_size=1,
+                   detection_targets=False, no_augmentation_sources=None):
     """A generator that returns images and corresponding target class ids,
     bounding box deltas.
 
@@ -1419,8 +1424,8 @@ def data_generator(dataset, config, shuffle=True, augment=False, augmentation=No
     augment: (deprecated. Use augmentation instead). If true, apply random
         image augmentation. Currently, only horizontal flipping is offered.
     augmentation: Optional. An imgaug (https://github.com/aleju/imgaug) augmentation.
-        For example, passing imgaug.augmenters.Fliplr(0.5) flips images
-        right/left 50% of the time.
+        For example, passing imgaug.augmenters.Fliplr(0.5) flips
+        images right/left 50% of the time.
     random_rois: If > 0 then generate proposals to be used to train the
                  network classifier heads. Useful if training
                  the Mask RCNN part without the RPN.
@@ -1531,7 +1536,8 @@ def data_generator(dataset, config, shuffle=True, augment=False, augmentation=No
             # If more instances than fits in the array, sub-sample from them.
             if gt_boxes.shape[0] > config.MAX_GT_INSTANCES:
                 ids = np.random.choice(
-                    np.arange(gt_boxes.shape[0]), config.MAX_GT_INSTANCES, replace=False)
+                    np.arange(gt_boxes.shape[0]), config.MAX_GT_INSTANCES,
+                              replace=False)
                 gt_class_ids = gt_class_ids[ids]
                 gt_boxes = gt_boxes[ids]
 
@@ -1552,8 +1558,8 @@ def data_generator(dataset, config, shuffle=True, augment=False, augmentation=No
 
             # Batch full?
             if b >= batch_size:
-                inputs = [batch_images, batch_image_meta, batch_rpn_match, batch_rpn_bbox,
-                          batch_gt_class_ids, batch_gt_boxes]
+                inputs = [batch_images, batch_image_meta, batch_rpn_match,
+                          batch_rpn_bbox, batch_gt_class_ids, batch_gt_boxes]
                 outputs = []
 
                 if random_rois:
@@ -1621,7 +1627,7 @@ class MaskRCNN():
 
         # Inputs
         input_image = KL.Input(
-            shape=[None, None, 3], name="input_image")
+            shape=[None, None, 6], name="input_image")
         input_image_meta = KL.Input(shape=[config.IMAGE_META_SIZE],
                                     name="input_image_meta")
         if mode == "training":
@@ -1686,9 +1692,11 @@ class MaskRCNN():
             anchors = self.get_anchors(config.IMAGE_SHAPE)
             # Duplicate across the batch dimension because Keras requires it
             # TODO: can this be optimized to avoid duplicating the anchors?
-            anchors = np.broadcast_to(anchors, (config.BATCH_SIZE,) + anchors.shape)
+            anchors = np.broadcast_to(anchors,
+                                      (config.BATCH_SIZE,) + anchors.shape)
             # A hack to get around Keras's bad support for constants
-            anchors = KL.Lambda(lambda x: tf.Variable(anchors), name="anchors")(input_image)
+            anchors = KL.Lambda(lambda x: tf.Variable(anchors),
+                                name="anchors")(input_image)
         else:
             anchors = input_anchors
 
@@ -1937,7 +1945,8 @@ class MaskRCNN():
                 * self.config.LOSS_WEIGHTS.get(name, 1.))
             self.keras_model.metrics_tensors.append(loss)
 
-    def set_trainable(self, layer_regex, keras_model=None, indent=0, verbose=1):
+    def set_trainable(self, layer_regex, keras_model=None,
+                      indent=0, verbose=1):
         """Sets model layers as trainable if their names match
         the given regular expression.
         """
@@ -2009,14 +2018,16 @@ class MaskRCNN():
         if not os.path.exists(self.log_dir):
             os.makedirs(self.log_dir)
 
-        # Path to save after each epoch. Include placeholders that get filled by Keras.
-        self.checkpoint_path = os.path.join(self.log_dir, "mask_rcnn_{}_*epoch*.h5".format(
-            self.config.NAME.lower()))
+        # Path to save after each epoch. Include placeholders that get filled
+        # by Keras.
+        self.checkpoint_path = os.path.join(self.log_dir,
+            "mask_rcnn_{}_*epoch*.h5".format(self.config.NAME.lower()))
         self.checkpoint_path = self.checkpoint_path.replace(
             "*epoch*", "{epoch:04d}")
 
     def train(self, train_dataset, val_dataset, learning_rate, epochs, layers,
-              augmentation=None, custom_callbacks=None, no_augmentation_sources=None):
+              augmentation=None, custom_callbacks=None,
+              no_augmentation_sources=None):
         """Train the model.
         train_dataset, val_dataset: Training and validation Dataset objects.
         learning_rate: The learning rate to train with
@@ -2039,13 +2050,14 @@ class MaskRCNN():
             time, and when it does it flips images right/left half the time
             and adds a Gaussian blur with a random sigma in range 0 to 5.
 
-                augmentation = imgaug.augmenters.Sometimes(0.5, [
+            augmentation = imgaug.augmenters.Sometimes(0.5, [
                     imgaug.augmenters.Fliplr(0.5),
                     imgaug.augmenters.GaussianBlur(sigma=(0.0, 5.0))
                 ])
-	    custom_callbacks: Optional. Add custom callbacks to be called
-	        with the keras fit_generator method. Must be list of type keras.callbacks. 
-        no_augmentation_sources: Optional. List of sources to exclude for
+            custom_callbacks: Optional. Add custom callbacks to be called
+            with the keras fit_generator method. Must be list of type
+            keras.callbacks.
+            no_augmentation_sources: Optional. List of sources to exclude for
             augmentation. A source is string that identifies a dataset and is
             defined in the Dataset class.
         """
@@ -2066,7 +2078,8 @@ class MaskRCNN():
             layers = layer_regex[layers]
 
         # Data generators
-        train_generator = data_generator(train_dataset, self.config, shuffle=True,
+        train_generator = data_generator(train_dataset, self.config,
+                                         shuffle=True,
                                          augmentation=augmentation,
                                          batch_size=self.config.BATCH_SIZE,
                                          no_augmentation_sources=no_augmentation_sources)
@@ -2076,17 +2089,18 @@ class MaskRCNN():
         # Callbacks
         callbacks = [
             keras.callbacks.TensorBoard(log_dir=self.log_dir,
-                                        histogram_freq=0, write_graph=True, write_images=False),
+                                        histogram_freq=0, write_graph=True,
+                                        write_images=False),
             keras.callbacks.ModelCheckpoint(self.checkpoint_path,
                                             verbose=0, save_weights_only=True),
         ]
-	
         # Add custom callbacks to the list
         if custom_callbacks:
             callbacks += custom_callbacks
 
         # Train
-        log("\nStarting at epoch {}. LR={}\n".format(self.epoch, learning_rate))
+        log("\nStarting at epoch {}. LR={}\n".format(self.epoch,
+                                                     learning_rate))
         log("Checkpoint Path: {}".format(self.checkpoint_path))
         self.set_trainable(layers)
         self.compile(learning_rate, self.config.LEARNING_MOMENTUM)
@@ -2158,11 +2172,12 @@ class MaskRCNN():
         network output to a format suitable for use in the rest of the
         application.
 
-        detections: [N, (y1, x1, y2, x2, class_id, score)] in normalized coordinates
+        detections: [N, (y1, x1, y2, x2, class_id, score)] in normalized
+            coordinates
         original_image_shape: [H, W, C] Original image shape before resizing
         image_shape: [H, W, C] Shape of the image after resizing and padding
-        window: [y1, x1, y2, x2] Pixel coordinates of box in the image where the real
-                image is excluding the padding.
+        window: [y1, x1, y2, x2] Pixel coordinates of box in the image Where
+            the real image is excluding the padding.
 
         Returns:
         boxes: [N, (y1, x1, y2, x2)] Bounding boxes in pixels
@@ -2229,13 +2244,15 @@ class MaskRCNN():
         image_shape = molded_images[0].shape
         for g in molded_images[1:]:
             assert g.shape == image_shape,\
-                "After resizing, all images must have the same size. Check IMAGE_RESIZE_MODE and image sizes."
+                "After resizing, all images must have the same size. Check \
+                IMAGE_RESIZE_MODE and image sizes."
 
         # Anchors
         anchors = self.get_anchors(image_shape)
         # Duplicate across the batch dimension because Keras requires it
         # TODO: can this be optimized to avoid duplicating the anchors?
-        anchors = np.broadcast_to(anchors, (self.config.BATCH_SIZE,) + anchors.shape)
+        anchors = np.broadcast_to(anchors,
+                                  (self.config.BATCH_SIZE,) + anchors.shape)
 
         if verbose:
             log("molded_images", molded_images)
@@ -2243,7 +2260,8 @@ class MaskRCNN():
             log("anchors", anchors)
         # Run object detection
         detections, _, _, _, _, _ =\
-            self.keras_model.predict([molded_images, image_metas, anchors], verbose=0)
+            self.keras_model.predict([molded_images, image_metas, anchors],
+                                     verbose=0)
         # Process detections
         results = []
         for i, image in enumerate(images):
@@ -2290,7 +2308,8 @@ class MaskRCNN():
         anchors = self.get_anchors(image_shape)
         # Duplicate across the batch dimension because Keras requires it
         # TODO: can this be optimized to avoid duplicating the anchors?
-        anchors = np.broadcast_to(anchors, (self.config.BATCH_SIZE,) + anchors.shape)
+        anchors = np.broadcast_to(anchors,
+                                  (self.config.BATCH_SIZE,) + anchors.shape)
 
         if verbose:
             log("molded_images", molded_images)
@@ -2298,7 +2317,8 @@ class MaskRCNN():
             log("anchors", anchors)
         # Run object detection
         detections, _, _, _, _, _ =\
-            self.keras_model.predict([molded_images, image_metas, anchors], verbose=0)
+            self.keras_model.predict([molded_images, image_metas, anchors],
+                                     verbose=0)
         # Process detections
         results = []
         for i, image in enumerate(molded_images):
@@ -2407,7 +2427,8 @@ class MaskRCNN():
 
         # Build a Keras function to run parts of the computation graph
         inputs = model.inputs
-        if model.uses_learning_phase and not isinstance(K.learning_phase(), int):
+        if model.uses_learning_phase and not isinstance(K.learning_phase(),
+                                                        int):
             inputs += [K.learning_phase()]
         kf = K.function(model.inputs, list(outputs.values()))
 
@@ -2421,11 +2442,13 @@ class MaskRCNN():
         anchors = self.get_anchors(image_shape)
         # Duplicate across the batch dimension because Keras requires it
         # TODO: can this be optimized to avoid duplicating the anchors?
-        anchors = np.broadcast_to(anchors, (self.config.BATCH_SIZE,) + anchors.shape)
+        anchors = np.broadcast_to(anchors,
+                                  (self.config.BATCH_SIZE,) + anchors.shape)
         model_in = [molded_images, image_metas, anchors]
 
         # Run inference
-        if model.uses_learning_phase and not isinstance(K.learning_phase(), int):
+        if model.uses_learning_phase and not isinstance(K.learning_phase(),
+                                                        int):
             model_in.append(0.)
         outputs_np = kf(model_in)
 
