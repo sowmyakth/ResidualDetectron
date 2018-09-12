@@ -630,7 +630,7 @@ class DetectionTargetLayer(KE.Layer):
             (None, self.config.TRAIN_ROIS_PER_IMAGE, 4)  # deltas
         ]
 
-    def compute_mask(self, inputs):
+    def compute_mask(self, inputs, mask=None):
         return [None, None, None]
 
 
@@ -1486,8 +1486,8 @@ def data_generator(dataset, config, shuffle=True, augment=False,
             else:
                 image, image_meta, gt_class_ids, gt_boxes = \
                     load_image_gt(dataset, config, image_id, augment=augment,
-                                augmentation=augmentation,
-                                use_mini_mask=config.USE_MINI_MASK)
+                                  augmentation=augmentation,
+                                  use_mini_mask=config.USE_MINI_MASK)
 
             # Skip images that have no instances. This can happen in cases
             # where we train on a subset of classes and the image doesn't
@@ -1627,7 +1627,7 @@ class MaskRCNN():
 
         # Inputs
         input_image = KL.Input(
-            shape=[None, None, 6], name="input_image")
+            shape=[None, None, 12], name="input_image")
         input_image_meta = KL.Input(shape=[config.IMAGE_META_SIZE],
                                     name="input_image_meta")
         if mode == "training":
@@ -2113,7 +2113,7 @@ class MaskRCNN():
         else:
             workers = multiprocessing.cpu_count()
 
-        self.keras_model.fit_generator(
+        history = self.keras_model.fit_generator(
             train_generator,
             initial_epoch=self.epoch,
             epochs=epochs,
@@ -2126,6 +2126,8 @@ class MaskRCNN():
             use_multiprocessing=True,
         )
         self.epoch = max(self.epoch, epochs)
+        print("Keras model fit", self.epoch)
+        return history
 
     def mold_inputs(self, images):
         """Takes a list of images and modifies them to the format expected
