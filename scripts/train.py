@@ -4,30 +4,22 @@ import os
 import sys
 import numpy as np
 import h5py
-import matplotlib; matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import dill
+import pandas as pd
+import tensorflow as tf
+
 
 # Root directory of the project
 ROOT_DIR = '/home/users/sowmyak/ResidualDetectron'
-
 # Directory to save logs and trained model
-
 MODEL_DIR = '/scratch/users/sowmyak/lavender/logs'
 # path to images
-DATA_PATH = '/scratch/users/sowmyak/lavender'
-
-CODE_PATH = '/home/users/sowmyak/NN_blend/scripts'
+DATA_PATH = '/scratch/users/sowmyak/lavender/resid_detection'
+CODE_PATH = '/home/users/sowmyak/ResidualDetectron/scripts'
 sys.path.append(CODE_PATH)
 
-
-
-
-MODEL_PATH = None
-# MODEL_PATH = '/scratch/users/sowmyak/lavender/logs/blend_final20180608T2004/mask_rcnn_blend_final_0050.h5'
-#MODEL_PATH = '/scratch/users/sowmyak/lavender/logs/blend_final_again20180608T2004/mask_rcnn_blend_final_again_0122.h5'
-#MODEL_PATH = '/scratch/users/sowmyak/lavender/logs/blend_test20180717T1318/mask_rcnn_blend_test_0045.h5'
-#MODEL_PATH = '/scratch/users/sowmyak/lavender/logs/blend_test_again20180719T1635/mask_rcnn_blend_test_again_0058.h5'
+MODEL_PATH = '/scratch/users/sowmyak/lavender/logs/resid120180911T1542/mask_rcnn_resid1_0020.h5'
 # Import Mask RCNN
 sys.path.append(ROOT_DIR)  # To find local version of the library
 from mrcnn.config import Config
@@ -36,45 +28,18 @@ import mrcnn.model as modellib
 # from mrcnn.model import log
 
 
-def normalize(im1, im2, c_index=2):
-    vmin = im1.min(axis=0).min(axis=0)[c_index]
-    vmax = im1.max(axis=0).max(axis=0)[c_index]
-    vmean = im1.mean(axis=0).mean(axis=0)
-    result = np.zeros_like(im2)
-    result[:] = im2
-    result[result < vmin] = vmin
-    result[result > vmax] = vmax
-    result = (result - vmin) / (vmax - vmin)
-    return result
-
-
-def normalize2(im, vmin, vmax, c_index=None):
-    result = np.zeros_like(im)
-    result[:] = im
-    if c_index is None:
-        for i in range(im.shape[2]):
-            result[:,:,i][result[:,:,i] < vmin] = vmin
-            result[:,:,i][result[:,:,i] > vmax] = vmax
-            result[:,:,i] = (result[:,:,i] - vmin) / (vmax - vmin)
-    else: 
-        result[result < vmin] = vmin
-        result[result > vmax] = vmax
-        result = (result - vmin) / (vmax - vmin)
-    return result * 255 # np.array(result * 255, dtype=np.uint8)
-
-
 class InputConfig(Config):
     """Configuration for training on the toy shapes dataset.
     Derives from the base Config class and overrides values specific
     to the toy shapes dataset.
     """
     # Give the configuration a recognizable name
-    NAME = "blend_new_loss_relu"
+    NAME = "resid1"
 
     # Train on 1 GPU and 8 images per GPU. We can put multiple images on each
     # GPU because the images are small. Batch size is 8 (GPUs * images/GPU).
     GPU_COUNT = 1
-    IMAGES_PER_GPU = 8 #32
+    IMAGES_PER_GPU = 8  # 32
 
     # Number of classes (including background)
     NUM_CLASSES = 1 + 1  # background + 3 shapes
@@ -92,26 +57,24 @@ class InputConfig(Config):
     TRAIN_ROIS_PER_IMAGE = 16
 
     # Use a small epoch since the data is simple
-    STEPS_PER_EPOCH = 500  #200
+    STEPS_PER_EPOCH = 500  # 200
 
     # use small validation steps since the epoch is small
-    VALIDATION_STEPS = 40  #10
+    VALIDATION_STEPS = 40  # 10
     # modifications here
-    LEARNING_RATE = 0.001
-    DETECTION_MIN_CONFIDENCE = 0.8
+    LEARNING_RATE = 0.0001
+    DETECTION_MIN_CONFIDENCE = 0.9
     # MEAN_PIXEL = np.array([0., 0., 0.])
     USE_MINI_MASK = False
-    LOSS_WEIGHTS = {
-        "rpn_class_loss": 1.,
-        "rpn_bbox_loss": 1.,
-        "mrcnn_class_loss": 1.,
-        "mrcnn_bbox_loss": 1.,
-    }
     # Bounding box refinement standard deviation for RPN and final detections.
     RPN_BBOX_STD_DEV = np.array([0.1, 0.1, 0.3, 0.3])
     BBOX_STD_DEV = np.array([0.1, 0.1, 0.3, 0.3])
-    POST_NMS_ROIS_TRAINING = 1000
-    POST_NMS_ROIS_INFERENCE = 500
+    POST_NMS_ROIS_TRAINING = 500
+    POST_NMS_ROIS_INFERENCE = 200
+    # Modification!
+    MEAN_PIXEL = np.zeros(12)
+    BACKBONE_STRIDES = [4, 8, 16, 32, 64]
+    # RPN_ANCHOR_RATIOS = [1, ]
 
 
 class ShapesDataset(utils.Dataset):
@@ -129,36 +92,24 @@ class ShapesDataset(utils.Dataset):
         # with open(filename, 'rb') as handle:
         #    data = pickle.load(handle)
         #    data = dill.load(handle)
-        self.X, self.Y = {}, {}
-        x_names = ('blend_image', 'loc2', 'loc1')
-        y_names = ('Y1', 'Y2')
         if training:
-            for name in x_names:
-                filename = os.path.join(DATA_PATH,
-                                        'lavender_temp/train_' + name + '.h5')
-                with h5py.File(filename, 'r') as hf:
-                    self.X[name] = hf[name][:]
-                print(self.X[name].shape)
-                assert not np.any(np.isnan(self.X[name]))
-            for name in y_names:
-                filename = os.path.join(DATA_PATH,
-                                        'lavender_temp/train_' + name + '.h5')
-                with h5py.File(filename, 'r') as hf:
-                    self.Y[name] = hf[name][:]
-                assert not np.any(np.isnan(self.Y[name]))
+            filename = os.path.join(DATA_PATH, "resid_images_norm_train.h5")
+            with h5py.File(filename, 'r') as hf:
+                self.X = hf['resid_images'][:]
+            print(self.X.shape)
+            assert not np.any(np.isnan(self.X))
+            filename = os.path.join(DATA_PATH, "resid_cat_train.csv")
+            self.Y = pd.read_csv(filename)
         else:
-            for name in x_names:
-                filename = os.path.join(DATA_PATH,
-                                        'lavender_temp/val_' + name + '.npy')
-                self.X[name] = np.load(filename)
-                assert not np.any(np.isnan(self.X[name]))
-            for name in y_names:
-                filename = os.path.join(DATA_PATH,
-                                        'lavender_temp/val_' + name + '.npy')
-                self.Y[name] = np.load(filename)
-                assert not np.any(np.isnan(self.Y[name]))
+            filename = os.path.join(DATA_PATH, "resid_images_norm_val.h5")
+            with h5py.File(filename, 'r') as hf:
+                self.X = hf['resid_images'][:]
+            print(self.X.shape)
+            assert not np.any(np.isnan(self.X))
+            filename = os.path.join(DATA_PATH, "resid_cat_val.csv")
+            self.Y = pd.read_csv(filename)
         if count is None:
-            count = len(self.X['blend_image'])
+            count = len(self.X)
         self.load_objects(count)
         print("Loaded {} blends".format(count))
 
@@ -185,26 +136,26 @@ class ShapesDataset(utils.Dataset):
         specs in image_info.
         returns RGB Image [height, width, bands]
         """
-        image = self.X['blend_image'][image_id, :, :, :]
+        image = self.X[image_id, :, :, :]
         return image  # rgb_image
+
+    def load_bbox(self, image_id):
+        """Generate bbox of undetcted object
+        """
+        x0 = self.Y.at[image_id, 'detect_x']
+        y0 = self.Y.at[image_id, 'detect_y']
+        h = self.Y.at[image_id, 'detect_h']
+        bbox = [[y0 - h / 2., x0 - h / 2., y0 + h / 2., x0 + h / 2.]]
+        class_id = np.array([1, ], dtype=np.int32)
+        return np.array(bbox, dtype=np.int32), class_id
 
     def image_reference(self, image_id):
         """Return the shapes data of the image."""
         info = self.image_info[image_id]
-        if info["source"] == "blend":
+        if info["source"] == "resid":
             return info["object"]
         else:
             super(self.__class__).image_reference(self, image_id)
-
-    def load_mask(self, image_id):
-        """Generate instance masks for shapes of the given image ID.
-        """
-        mask1 = self.X['loc1'][image_id]
-        mask2 = self.X['loc2'][image_id]
-        mask = np.dstack([mask1, mask2])
-        # Map class names to class IDs.
-        class_ids = np.array([1, 1])
-        return mask.astype(np.bool), class_ids.astype(np.int32)
 
 
 def plot_history(history, string='training'):
@@ -232,11 +183,10 @@ def plot_history(history, string='training'):
     ax[2].legend(loc='upper left')
     name = string + '_loss'
     fig.savefig(name)
-    with open(name + ".dill", 'wb') as handle:
-        dill.dump(history.history, handle)
 
 
 def main():
+    tf.set_random_seed(0)
     config = InputConfig()
     config.display()
     # Training dataset# Train
@@ -259,14 +209,14 @@ def main():
         model_path = MODEL_PATH
         print("Loading weights from ", model_path)
         model.load_weights(model_path, by_name=True)
-    # Training - Stage 1
-    print("head layers")
-    history1 = model.train(dataset_train, dataset_val,
+
+    history2 = model.train(dataset_train, dataset_val,
                            learning_rate=config.LEARNING_RATE,
                            epochs=40,
                            layers='all')
-    plot_history(history1, config.NAME + '_run1')
-
+    name = config.NAME + '_run2_loss'
+    with open(name + ".dill", 'wb') as handle:
+        dill.dump(history2.history, handle)
 
 
 if __name__ == "__main__":
