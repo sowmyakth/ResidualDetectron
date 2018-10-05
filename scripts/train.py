@@ -1,10 +1,8 @@
 # Script to train data
-
 import os
 import sys
 import numpy as np
 import h5py
-import matplotlib.pyplot as plt
 import dill
 import pandas as pd
 import tensorflow as tf
@@ -13,13 +11,13 @@ import tensorflow as tf
 # Root directory of the project
 ROOT_DIR = '/home/users/sowmyak/ResidualDetectron'
 # Directory to save logs and trained model
-MODEL_DIR = '/scratch/users/sowmyak/lavender/logs'
+MODEL_DIR = '/scratch/users/sowmyak/resid/logs'
 # path to images
-DATA_PATH = '/scratch/users/sowmyak/lavender/resid_detection'
+DATA_PATH = '/scratch/users/sowmyak/resid/data'
 CODE_PATH = '/home/users/sowmyak/ResidualDetectron/scripts'
 sys.path.append(CODE_PATH)
 
-MODEL_PATH = '/scratch/users/sowmyak/lavender/logs/resid120180911T1542/mask_rcnn_resid1_0020.h5'
+MODEL_PATH = None
 # Import Mask RCNN
 sys.path.append(ROOT_DIR)  # To find local version of the library
 from mrcnn.config import Config
@@ -34,7 +32,7 @@ class InputConfig(Config):
     to the toy shapes dataset.
     """
     # Give the configuration a recognizable name
-    NAME = "resid1"
+    NAME = "resid1_again"
 
     # Train on 1 GPU and 8 images per GPU. We can put multiple images on each
     # GPU because the images are small. Batch size is 8 (GPUs * images/GPU).
@@ -62,7 +60,7 @@ class InputConfig(Config):
     # use small validation steps since the epoch is small
     VALIDATION_STEPS = 40  # 10
     # modifications here
-    LEARNING_RATE = 0.0001
+    LEARNING_RATE = 0.0005
     DETECTION_MIN_CONFIDENCE = 0.9
     # MEAN_PIXEL = np.array([0., 0., 0.])
     USE_MINI_MASK = False
@@ -73,8 +71,9 @@ class InputConfig(Config):
     POST_NMS_ROIS_INFERENCE = 200
     # Modification!
     MEAN_PIXEL = np.zeros(12)
+    IMAGE_SHAPE = np.array([128, 128, 12])
     BACKBONE_STRIDES = [4, 8, 16, 32, 64]
-    # RPN_ANCHOR_RATIOS = [1, ]
+    RPN_ANCHOR_RATIOS = [0.5, 1, 2]
 
 
 class ShapesDataset(utils.Dataset):
@@ -93,20 +92,20 @@ class ShapesDataset(utils.Dataset):
         #    data = pickle.load(handle)
         #    data = dill.load(handle)
         if training:
-            filename = os.path.join(DATA_PATH, "resid_images_norm_train.h5")
+            filename = os.path.join(DATA_PATH, "resid_train.h5")
             with h5py.File(filename, 'r') as hf:
                 self.X = hf['resid_images'][:]
             print(self.X.shape)
             assert not np.any(np.isnan(self.X))
-            filename = os.path.join(DATA_PATH, "resid_cat_train.csv")
+            filename = os.path.join(DATA_PATH, "resid_train.csv")
             self.Y = pd.read_csv(filename)
         else:
-            filename = os.path.join(DATA_PATH, "resid_images_norm_val.h5")
+            filename = os.path.join(DATA_PATH, "resid_val.h5")
             with h5py.File(filename, 'r') as hf:
                 self.X = hf['resid_images'][:]
             print(self.X.shape)
             assert not np.any(np.isnan(self.X))
-            filename = os.path.join(DATA_PATH, "resid_cat_val.csv")
+            filename = os.path.join(DATA_PATH, "resid_val.csv")
             self.Y = pd.read_csv(filename)
         if count is None:
             count = len(self.X)
@@ -136,8 +135,8 @@ class ShapesDataset(utils.Dataset):
         specs in image_info.
         returns RGB Image [height, width, bands]
         """
-        image = self.X[image_id, :, :, :]
-        return image  # rgb_image
+        image = np.transpose(self.X[image_id, :, :, :], axes=(1, 0, 2))
+        return image
 
     def load_bbox(self, image_id):
         """Generate bbox of undetcted object
@@ -145,7 +144,7 @@ class ShapesDataset(utils.Dataset):
         x0 = self.Y.at[image_id, 'detect_x']
         y0 = self.Y.at[image_id, 'detect_y']
         h = self.Y.at[image_id, 'detect_h']
-        bbox = [[y0 - h / 2., x0 - h / 2., y0 + h / 2., x0 + h / 2.]]
+        bbox = [[y0, x0, y0 + h, x0 + h]]
         class_id = np.array([1, ], dtype=np.int32)
         return np.array(bbox, dtype=np.int32), class_id
 
@@ -156,33 +155,6 @@ class ShapesDataset(utils.Dataset):
             return info["object"]
         else:
             super(self.__class__).image_reference(self, image_id)
-
-
-def plot_history(history, string='training'):
-    print(history.history.keys())
-    loss_names = ['rpn_class_loss', 'rpn_bbox_loss', 'mrcnn_class_loss',
-                  'mrcnn_bbox_loss']
-    fig, ax = plt.subplots(1, 3, figsize=(14, 8))
-    ax[0].plot(history.history['loss'], label='train_loss')
-    ax[0].plot(history.history['val_loss'], label='val_loss')
-    ax[0].set_title('model loss')
-    ax[0].set_ylabel('loss')
-    ax[0].set_xlabel('epoch')
-    ax[0].legend(loc='upper left')
-    for name in loss_names:
-        ax[1].plot(history.history[name], label='train_' + name)
-    ax[1].set_title('train loss')
-    ax[1].set_ylabel('loss')
-    ax[1].set_xlabel('epoch')
-    ax[1].legend(loc='upper left')
-    for name in loss_names:
-        ax[2].plot(history.history['val_' + name], label='val_' + name)
-    ax[2].set_title('val loss')
-    ax[2].set_ylabel('loss')
-    ax[2].set_xlabel('epoch')
-    ax[2].legend(loc='upper left')
-    name = string + '_loss'
-    fig.savefig(name)
 
 
 def main():
@@ -209,14 +181,13 @@ def main():
         model_path = MODEL_PATH
         print("Loading weights from ", model_path)
         model.load_weights(model_path, by_name=True)
-
-    history2 = model.train(dataset_train, dataset_val,
+    history1 = model.train(dataset_train, dataset_val,
                            learning_rate=config.LEARNING_RATE,
-                           epochs=40,
+                           epochs=80,
                            layers='all')
-    name = config.NAME + '_run2_loss'
+    name = config.NAME + '_run1_loss'
     with open(name + ".dill", 'wb') as handle:
-        dill.dump(history2.history, handle)
+        dill.dump(history1.history, handle)
 
 
 if __name__ == "__main__":
