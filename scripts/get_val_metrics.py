@@ -1,3 +1,8 @@
+"""Script to test perfomance of a model in detcting previously unindentified
+galaxy from residual images. Based on the network prediction for each image
+the put put is classified as succesfull or not and perfomance metrics are
+computed
+"""
 import os
 import sys
 import numpy as np
@@ -11,7 +16,6 @@ DATA_PATH = '/scratch/users/sowmyak/resid/results'
 CODE_PATH = '/home/users/sowmyak/ResidualDetectron/scripts'
 sys.path.append(CODE_PATH)
 sys.path.append(ROOT_DIR)  # To find local version of the library
-from mrcnn.config import Config
 from mrcnn import utils
 
 
