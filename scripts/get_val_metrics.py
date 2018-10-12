@@ -1,7 +1,6 @@
 import os
 import sys
 import numpy as np
-import dill
 import pandas as pd
 # Root directory of the project
 ROOT_DIR = '/home/users/sowmyak/ResidualDetectron'
@@ -14,7 +13,6 @@ sys.path.append(CODE_PATH)
 sys.path.append(ROOT_DIR)  # To find local version of the library
 from mrcnn.config import Config
 from mrcnn import utils
-from mrcnn import visualize
 
 
 # Change this for differnt models
@@ -76,9 +74,9 @@ def get_unit_distances(cat, result, image_id):
     gt_x01 = cat['detect_x'][image_id] + cat['detect_h'][image_id] / 2.
     gt_y01 = cat['detect_y'][image_id] + cat['detect_h'][image_id] / 2.
     gt_x02, gt_y02 = cat['other_x0'][image_id], cat['other_y0'][image_id]
-    scrlt_x0, scrlt_y0 = cat['scrlt_y0'][image_id], cat['scrlt_x0'][image_id]
-    dist1 = np.hypot((scrlt_x0 - gt_x01), (scrlt_y0 - gt_y01))
-    dist2 = np.hypot((scrlt_x0 - gt_x02), (scrlt_y0 - gt_y02))
+    # scrlt_x0, scrlt_y0 = cat['scrlt_y0'][image_id], cat['scrlt_x0'][image_id]
+    # dist1 = np.hypot((scrlt_x0 - gt_x01), (scrlt_y0 - gt_y01))
+    # dist2 = np.hypot((scrlt_x0 - gt_x02), (scrlt_y0 - gt_y02))
     # ds1 = np.hypot((pred_x0 - gt_x01), (pred_y0 - gt_y01)) / dist1
     # ds2 = np.hypot((pred_x0 - gt_x02), (pred_y0 - gt_y02)) / dist2
     ds1 = np.hypot((pred_x0 - gt_x01), (pred_y0 - gt_y01)) / cat['detect_h'][image_id]
