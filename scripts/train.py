@@ -100,12 +100,12 @@ class ShapesDataset(utils.Dataset):
             filename = os.path.join(DATA_PATH, "resid_train.csv")
             self.Y = pd.read_csv(filename)
         else:
-            filename = os.path.join(DATA_PATH, "resid_val.h5")
+            filename = os.path.join(DATA_PATH, "resid_val_w_neg.h5")
             with h5py.File(filename, 'r') as hf:
                 self.X = hf['resid_images'][:]
             print(self.X.shape)
             assert not np.any(np.isnan(self.X))
-            filename = os.path.join(DATA_PATH, "resid_val.csv")
+            filename = os.path.join(DATA_PATH, "resid_val_w_neg.csv")
             self.Y = pd.read_csv(filename)
         if count is None:
             count = len(self.X)
@@ -183,11 +183,18 @@ def main():
         model.load_weights(model_path, by_name=True)
     history1 = model.train(dataset_train, dataset_val,
                            learning_rate=config.LEARNING_RATE,
-                           epochs=80,
+                           epochs=60,
                            layers='all')
     name = config.NAME + '_run1_loss'
     with open(name + ".dill", 'wb') as handle:
         dill.dump(history1.history, handle)
+    history2 = model.train(dataset_train, dataset_val,
+                           learning_rate=config.LEARNING_RATE,
+                           epochs=120,
+                           layers='all')
+    name = config.NAME + '_run2_loss'
+    with open(name + ".dill", 'wb') as handle:
+        dill.dump(history2.history, handle)
 
 
 if __name__ == "__main__":
