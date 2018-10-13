@@ -20,13 +20,13 @@ from mrcnn import utils
 
 
 # Change this for differnt models
-import train6 as train
-from train6 import InputConfig
+import train as train
+from train import InputConfig
 import mrcnn.model as modellib
 
-#MODEL_PATH ='/scratch/users/sowmyak/resid/logs/resid1_again20181008T1132/mask_rcnn_resid1_again_0060.h5'
-#MODEL_PATH = '/scratch/users/sowmyak/resid/logs/resid320180926T1459/mask_rcnn_resid3_0060.h5'
-MODEL_PATH = '/scratch/users/sowmyak/resid/logs/resid620181008T1416/mask_rcnn_resid6_0060.h5'
+MODEL_PATH ='/scratch/users/sowmyak/resid/logs/resid1_again20181008T1132/mask_rcnn_resid1_again_0060.h5'
+# MODEL_PATH = '/scratch/users/sowmyak/resid/logs/resid320180926T1459/mask_rcnn_resid3_0060.h5'
+# MODEL_PATH = '/scratch/users/sowmyak/resid/logs/resid620181008T1416/mask_rcnn_resid6_0060.h5'
 
 
 def get_val_set(dataset_val):
@@ -39,14 +39,17 @@ def get_val_set(dataset_val):
     q1, = np.where(dataset_val.Y['input_indxs'] == 0)
     dataset_val.Y.loc[q1, ['other_x0']] = dataset_val.Y['gal1_x_tru'][q1]
     dataset_val.Y.loc[q1, ['other_y0']] = dataset_val.Y['gal1_y_tru'][q1]
-    dataset_val.Y.loc[q1, ['other_h']] = np.hypot(dataset_val.Y['gal1_sigma_tru'][q1] * 2.35, 0.67) / 0.2
+    dataset_val.Y.loc[q1, ['other_h']] = np.hypot(
+        dataset_val.Y['gal1_sigma_tru'][q1] * 2.35, 0.67) / 0.2
     q2, = np.where(dataset_val.Y['input_indxs'] == 1)
     dataset_val.Y.loc[q2, ['other_x0']] = dataset_val.Y['gal2_x_tru'][q2]
     dataset_val.Y.loc[q2, ['other_y0']] = dataset_val.Y['gal2_y_tru'][q2]
-    dataset_val.Y.loc[q2, ['other_h']] = np.hypot(dataset_val.Y['gal1_sigma_tru'][q2] * 2.35, 0.67) / 0.2
+    dataset_val.Y.loc[q2, ['other_h']] = np.hypot(
+        dataset_val.Y['gal1_sigma_tru'][q2] * 2.35, 0.67) / 0.2
     ids, = np.where((dataset_val.Y['input_indxs'] != 2))
-    dataset_val.Y = dataset_val.Y.drop(['Unnamed: 0', 'Unnamed: 0.1', 'Unnamed: 0.1.1'], axis=1)
-    print(f"select {len(ids)} images for analysis from {len(dataset_val.Y)} images in val set ")
+    # dataset_val.Y = dataset_val.Y.drop(['Unnamed: 0', 'Unnamed: 0.1', 'Unnamed: 0.1.1'], axis=1)
+    print(f"select {len(ids)} images for analysis from {len(dataset_val.Y)} \
+        images in val set ")
     return dataset_val, ids
 
 
@@ -83,8 +86,10 @@ def get_unit_distances(cat, result, image_id):
     # dist2 = np.hypot((scrlt_x0 - gt_x02), (scrlt_y0 - gt_y02))
     # ds1 = np.hypot((pred_x0 - gt_x01), (pred_y0 - gt_y01)) / dist1
     # ds2 = np.hypot((pred_x0 - gt_x02), (pred_y0 - gt_y02)) / dist2
-    ds1 = np.hypot((pred_x0 - gt_x01), (pred_y0 - gt_y01)) / cat['detect_h'][image_id]
-    ds2 = np.hypot((pred_x0 - gt_x02), (pred_y0 - gt_y02)) / cat['other_h'][image_id]
+    ds1 = np.hypot(
+        (pred_x0 - gt_x01), (pred_y0 - gt_y01)) / cat['detect_h'][image_id]
+    ds2 = np.hypot(
+        (pred_x0 - gt_x02), (pred_y0 - gt_y02)) / cat['other_h'][image_id]
     return ds1, ds2
 
 
