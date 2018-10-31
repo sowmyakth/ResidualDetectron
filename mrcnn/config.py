@@ -83,7 +83,8 @@ class Config(object):
     # If 1 then anchors are created for each cell in the backbone feature map.
     # If 2, then anchors are created for every other cell, and so on.
     RPN_ANCHOR_STRIDE = 1
-
+    # Improve performance by limiting number of proposals
+    RPN_PRE_NMS_LIMIT = 6000
     # Non-max suppression threshold to filter RPN proposals.
     # You can increase this during training to generate more propsals.
     RPN_NMS_THRESHOLD = 0.7
