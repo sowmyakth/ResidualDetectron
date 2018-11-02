@@ -1477,6 +1477,7 @@ def data_generator(dataset, config, shuffle=True, augment=False,
 
             # Get GT bounding boxes for image.
             image_id = image_ids[image_index]
+            print(f"batch{b}; image id{image_id}")
 
             # If the image source is not to be augmented pass None as augmentation
             if dataset.image_info[image_id]['source'] in no_augmentation_sources:
@@ -2550,7 +2551,7 @@ def mold_image(images, config):
 
 def unmold_image(normalized_images, config):
     """Takes a image normalized with mold() and returns the original."""
-    return (normalized_images + config.MEAN_PIXEL).astype(np.uint8)
+    return (normalized_images + config.MEAN_PIXEL).astype(np.float32)
 
 
 ############################################################
