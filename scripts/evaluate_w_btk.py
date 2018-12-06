@@ -4,7 +4,6 @@ import sys
 BTK_PATH = '/home/users/sowmyak/BlendingToolKit/'
 sys.path.insert(0, BTK_PATH)
 import btk
-from btk import config, compute_metrics
 
 # Directory to save logs and trained model
 MODEL_DIR = '/scratch/users/sowmyak/resid/logs'
@@ -24,7 +23,8 @@ def get_btk_generator():
     # Input catalog name
     catalog_name = os.path.join("/scratch/users/sowmyak/data", 'OneDegSq.fits')
     # Load parameters
-    param = btk.config.Simulation_params(catalog_name, max_number=2, batch_size=1)
+    param = btk.config.Simulation_params(
+        catalog_name, max_number=2, batch_size=1, seed=199)
     np.random.seed(param.seed)
     # Load input catalog
     catalog = btk.get_input_catalog.load_catlog(param)
@@ -75,7 +75,7 @@ def main(Args):
             detected_centers, true_cent)
         results.append([len(true_cent), det, undet, spur])
     arr_results = np.array(results).T
-    print("Results: ", np.mean(arr_results, axis=1))
+    print("Results: ", np.sum(arr_results, axis=1))
     save_file_name = f"detection_results_{Args.model_name}.txt"
     np.savetxt(save_file_name, arr_results)
 
