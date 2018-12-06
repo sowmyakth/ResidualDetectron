@@ -1,24 +1,65 @@
 """Contains functions to perform detection, deblending and measurement
     on images.
 """
+import sys
 import sep
 from btk import measure
+from btk import compute_metrics
 import numpy as np
 import scarlet
 from scipy import spatial
 import descwl
+import matplotlib.pyplot as plt
 from astropy.table import vstack
+ROOT_DIR = '/home/users/sowmyak/ResidualDetectron'
+sys.path.append(ROOT_DIR)  # To find local version of the library
+from mrcnn import utils
 
 
-def get_undetected(true_cat, meas_cent, obs_cond):
+def get_ax(rows=1, cols=1, size=4):
+    """Return a Matplotlib Axes array to be used in
+    all visualizations in the notebook. Provide a
+    central point to control graph sizes.
+
+    Adjust the size attribute to control how big to render images
+    """
+    _, ax = plt.subplots(rows, cols, figsize=(size*cols, size*rows))
+    return ax
+
+
+def resid_merge_centers(det_cent, bbox, distance_upper_bound=1):
+    """Combines centers from detection algorithm and iteratively
+    detected centers"""
+    # remove duplicates
+    if len(bbox) == 0:
+        return det_cent
+    q, = np.where((bbox[:, 0] > 10) & (bbox[:, 1] > 10))
+    # centers of bbox as mean of edges
+    iter_det = np.dstack([np.mean(bbox[q, 1::2], axis=1) - 4,
+                         np.mean(bbox[q, ::2], axis=1) - 4])[0]
+    unique_det_cent = np.unique(det_cent, axis=0)
+    z_tree = spatial.KDTree(unique_det_cent)
+    iter_det = iter_det.reshape(-1, 2)
+    match = z_tree.query(iter_det,
+                         distance_upper_bound=distance_upper_bound)
+    trim = np.setdiff1d(range(len(unique_det_cent)), match[1])
+    trim_det_cent = [unique_det_cent[i] for i in trim]
+    if len(trim_det_cent) == 0:
+        return iter_det
+    detected = np.vstack([trim_det_cent, iter_det])
+    print(detected, unique_det_cent, iter_det)
+    return detected
+
+
+def get_undetected(true_cat, meas_cent, obs_cond, distance_upper_bound=10):
     """Returns bbox of galaxy that is undetected"""
     psf_sigma = obs_cond.psf_sigma_m
     pixel_scale = obs_cond.pixel_scale
     peaks = np.stack([true_cat['dx'], true_cat['dy']]).T
     z_tree = spatial.KDTree(peaks)
-    tolerance = 10
-    match = z_tree.query(meas_cent, distance_upper_bound=tolerance)
-    undetected = np.setdiff1d(range(len(true_cat)), match)
+    meas_cent = np.array(meas_cent).reshape(-1, 2)
+    match = z_tree.query(meas_cent, distance_upper_bound=distance_upper_bound)
+    undetected = np.setdiff1d(range(len(true_cat)), match[1])
     numer = true_cat['a_d']*true_cat['b_d']*true_cat['fluxnorm_disk'] + true_cat['a_b']*true_cat['b_b']*true_cat['fluxnorm_bulge']
     hlr = numer / (true_cat['fluxnorm_disk'] + true_cat['fluxnorm_bulge'])
     h = np.hypot(hlr, 1.18*psf_sigma)*2 / pixel_scale
@@ -110,9 +151,6 @@ class Scarlet_resid_params(measure.Measurement_params):
     e_rel = .015
     detect_centers = True
 
-    def make_measurement(self, data=None, index=None):
-        return None
-
     def get_centers(self, image):
         detect = image.mean(axis=0)  # simple average for detection
         bkg = sep.Background(detect)
@@ -197,6 +235,8 @@ class Scarlet_resid_params(measure.Measurement_params):
     def get_deblended_images(self, data, index):
         """Returns scarlet modeled blend  and centers for the given blend"""
         images = np.transpose(data['blend_images'][index], axes=(2, 0, 1))
+        #print(np.sum(images, axis=1).sum(axis=1))
+        #print(data['obs_condition'][3].mean_sky_level)
         blend_cat = data['blend_list'][index]
         if self.detect_centers:
             peaks = self.get_centers(images)
@@ -209,3 +249,80 @@ class Scarlet_resid_params(measure.Measurement_params):
         selected_peaks = [[src.center[1], src.center[0]]for src in blend.components]
         model = np.transpose(blend.get_model(), axes=(1, 2, 0))
         return [model, selected_peaks]
+
+
+class ResidDataset(utils.Dataset):
+    """Generates the shapes synthetic dataset. The dataset consists of simple
+    shapes (triangles, squares, circles) placed randomly on a blank surface.
+    The images are generated on the fly. No file access required.
+    """
+    def __init__(self, meas_generator, *args, **kwargs):
+        super(ResidDataset, self).__init__(*args, **kwargs)
+        self.meas_generator = meas_generator
+
+    def load_data(self, training=True, count=None):
+        """loads training and test input and output data
+        Keyword Arguments:
+            filename -- Numpy file where data is saved
+        """
+        if training:
+            count = 8000
+        else:
+            count = 240
+        self.load_objects(count, training)
+        print("Loaded {} blends".format(count))
+
+    def load_objects(self, count, training):
+        """Generate the requested number of synthetic images.
+        count: number of images to generate.
+        height, width: the size of the generated images.
+        """
+        # Add classes
+        self.add_class("resid", 1, "object")
+
+        # Add images
+        # Generate random specifications of images (i.e. color and
+        # list of shapes sizes and locations). This is more compact than
+        # actual images. Images are generated on the fly in load_image().
+        for i in range(count):
+            self.add_image("resid", image_id=i, path=None,
+                           object="object")
+
+    def load_input(self, image_id):
+        """Generates image + bbox for undetected objects if any"""
+        output, deb, _= next(self.meas_generator)
+        blend_images = output['blend_images'][0]
+        blend_list = output['blend_list'][0]
+        obs_cond = output['obs_condition']
+        model_images = deb[0][0]
+        detected_centers = deb[0][1]
+        self.det_cent = detected_centers
+        self.true_cent = np.stack([blend_list['dx'], blend_list['dy']]).T
+        resid_images = blend_images - model_images
+        mean1 = 1.6361405416087091
+        std1 = 416.16687641284665
+        mean2 = 63.16814480535191
+        std2 = 2346.133101333463
+        resid_images = (resid_images - mean1)/std1
+        model_images = (model_images - mean2)/std2
+        input_image = np.dstack([resid_images, model_images])
+        x, y, h = get_undetected(blend_list, detected_centers,
+                                 obs_cond[3])
+        bbox = [[4, 4, 5, 5]]
+        bbox += [[y[i] + 4, x[i] + 4, y[i] + h[i] + 4, x[i] + h[i] + 4] for i in range(len(x))]
+        class_id = np.array([0] + [1]*len(x))
+        return input_image, np.array(bbox, dtype=np.int32), class_id
+
+    def image_reference(self, image_id):
+        """Return the shapes data of the image."""
+        info = self.image_info[image_id]
+        if info["source"] == "resid":
+            return info["object"]
+        else:
+            super(self.__class__).image_reference(self, image_id)
+
+
+class Resid_metrics_param(compute_metrics.Metrics_params):
+    def get_detections(self, data, index):
+        detected_centers = data[1][index][1]
+        return None
