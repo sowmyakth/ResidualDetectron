@@ -3,8 +3,7 @@
 """
 import sys
 import sep
-from btk import measure
-from btk import compute_metrics
+import btk
 import numpy as np
 import scarlet
 from scipy import spatial
@@ -14,6 +13,7 @@ from astropy.table import vstack
 ROOT_DIR = '/home/users/sowmyak/ResidualDetectron'
 sys.path.append(ROOT_DIR)  # To find local version of the library
 from mrcnn import utils
+import mrcnn.model_w_btk as model_btk
 
 
 def get_ax(rows=1, cols=1, size=4):
@@ -146,7 +146,7 @@ def resid_obs_conditions(Args, band):
     return survey
 
 
-class Scarlet_resid_params(measure.Measurement_params):
+class Scarlet_resid_params(btk.measure.Measurement_params):
     iters = 400
     e_rel = .015
     detect_centers = True
@@ -322,7 +322,59 @@ class ResidDataset(utils.Dataset):
             super(self.__class__).image_reference(self, image_id)
 
 
-class Resid_metrics_param(compute_metrics.Metrics_params):
-    def get_detections(self, data, index):
-        detected_centers = data[1][index][1]
-        return None
+class Resid_metrics_param(btk.compute_metrics.Metrics_params):
+
+    def make_resid_model(self, model_name, model_path, model_dir):
+        file_name = "train" + model_name
+        train = __import__(file_name)
+        meas_generator = self.make_meas_generator()
+        self.dataset_val = ResidDataset(meas_generator)
+        self.dataset_val.load_data(training=False)
+        self.dataset_val.prepare()
+
+        class InferenceConfig(train.InputConfig):
+            GPU_COUNT = 1
+            IMAGES_PER_GPU = 1
+
+        self.inference_config = InferenceConfig()
+        self.model = model_btk.MaskRCNN(mode="inference",
+                                        config=self.inference_config,
+                                        model_dir=model_dir)
+        print("Loading weights from ", model_path)
+        self.model.load_weights(model_path, by_name=True)
+
+    def make_meas_generator(self, catalog_name):
+        """
+        Creates the default btk.meas_generator for input catalog
+        Overwrite this function for user defined measurement generator
+        """
+        # Load parameters
+        param = btk.config.Simulation_params(
+            catalog_name, max_number=2, batch_size=1, seed=199)
+        np.random.seed(param.seed)
+        # Load input catalog
+        catalog = btk.get_input_catalog.load_catlog(param)
+        # Generate catlogs of blended objects
+        blend_generator = btk.create_blend_generator.generate(
+            param, catalog, resid_sampling_function)
+        # Generates observing conditions
+        observing_generator = btk.create_observing_generator.generate(
+            param, resid_obs_conditions)
+        # Generate images of blends in all the observing bands
+        draw_blend_generator = btk.draw_blends.generate(
+            param, blend_generator, observing_generator)
+        meas_params = Scarlet_resid_params()
+        meas_generator = btk.measure.generate(
+            meas_params, draw_blend_generator, param)
+        self.meas_generator = meas_generator
+
+    def get_detections(self, index):
+        image, image_meta, gt_class_id, gt_bbox =\
+            model_btk.load_image_gt(self.dataset_val, self.inference_config,
+                                    (index), use_mini_mask=False)
+        true_centers = self.dataset_val.true_cent
+        in_detected_center = self.dataset_val.det_cent
+        results1 = self.model.detect([image], verbose=0)
+        r1 = results1[0]
+        detected_centers = resid_merge_centers(in_detected_center, r1['rois'])
+        return detected_centers, true_centers
