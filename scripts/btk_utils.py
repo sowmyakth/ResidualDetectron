@@ -27,9 +27,16 @@ def get_ax(rows=1, cols=1, size=4):
     return ax
 
 
-def resid_merge_centers(det_cent, bbox, distance_upper_bound=1):
+def resid_merge_centers(det_cent, bbox, distance_upper_bound=3):
     """Combines centers from detection algorithm and iteratively
-    detected centers"""
+    detected centers
+    Args:
+        det_cent: centers detected by detection algorithm.
+        bbox: Edges of ResidDetectron bounding box (y1, x1, y2, x2).
+        distance_upper_bound: If network prediction is within this distance of
+                              a det_cent, select the network prediction and
+                              remove det_cent from final merged predictions.
+    """
     # remove duplicates
     if len(bbox) == 0:
         return det_cent
@@ -47,7 +54,6 @@ def resid_merge_centers(det_cent, bbox, distance_upper_bound=1):
     if len(trim_det_cent) == 0:
         return iter_det
     detected = np.vstack([trim_det_cent, iter_det])
-    print(detected, unique_det_cent, iter_det)
     return detected
 
 
@@ -324,11 +330,12 @@ class ResidDataset(utils.Dataset):
 
 class Resid_metrics_param(btk.compute_metrics.Metrics_params):
 
-    def make_resid_model(self, model_name, model_path, model_dir):
+    def make_resid_model(self, model_name, model_path,
+                         model_dir, catalog_name):
         file_name = "train" + model_name
         train = __import__(file_name)
-        meas_generator = self.make_meas_generator()
-        self.dataset_val = ResidDataset(meas_generator)
+        self.meas_generator = self.make_meas_generator(catalog_name)
+        self.dataset_val = ResidDataset(self.meas_generator)
         self.dataset_val.load_data(training=False)
         self.dataset_val.prepare()
 
@@ -354,7 +361,7 @@ class Resid_metrics_param(btk.compute_metrics.Metrics_params):
         np.random.seed(param.seed)
         # Load input catalog
         catalog = btk.get_input_catalog.load_catlog(param)
-        # Generate catlogs of blended objects
+        # Generate catalogs of blended objects
         blend_generator = btk.create_blend_generator.generate(
             param, catalog, resid_sampling_function)
         # Generates observing conditions
@@ -366,7 +373,7 @@ class Resid_metrics_param(btk.compute_metrics.Metrics_params):
         meas_params = Scarlet_resid_params()
         meas_generator = btk.measure.generate(
             meas_params, draw_blend_generator, param)
-        self.meas_generator = meas_generator
+        return meas_generator
 
     def get_detections(self, index):
         image, image_meta, gt_class_id, gt_bbox =\
