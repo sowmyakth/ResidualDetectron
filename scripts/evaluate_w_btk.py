@@ -30,7 +30,7 @@ def get_btk_generator():
     catalog = btk.get_input_catalog.load_catlog(param)
     # Generate catlogs of blended objects
     blend_generator = btk.create_blend_generator.generate(
-        param, catalog, btk_utils.resid_sampling_function)
+        param, catalog, btk_utils.resid_general_sampling_function)
     # Generates observing conditions for the selected survey_name & all bands
     observing_generator = btk.create_observing_generator.generate(
         param, btk_utils.resid_obs_conditions)
@@ -62,7 +62,7 @@ def main(Args):
                               model_dir=MODEL_DIR)
     print("Loading weights from ", Args.model_path)
     model.load_weights(Args.model_path, by_name=True)
-    for im_id in range(15):
+    for im_id in range(4000):
         image1, image_meta1, gt_class_id1, gt_bbox1 =\
             modellib.load_image_gt(dataset_val, inference_config,
                                    (im_id), use_mini_mask=False)
