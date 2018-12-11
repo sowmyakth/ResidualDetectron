@@ -27,7 +27,7 @@ def get_ax(rows=1, cols=1, size=4):
     return ax
 
 
-def resid_merge_centers(det_cent, bbox, distance_upper_bound=3):
+def resid_merge_centers(det_cent, bbox, distance_upper_bound=1):
     """Combines centers from detection algorithm and iteratively
     detected centers
     Args:
@@ -113,6 +113,30 @@ def resid_sampling_function(Args, catalog):
     dy2 = dr * np.sin(theta)
     blend_catalog['ra'][1] += dx2
     blend_catalog['dec'][1] += dy2
+    return blend_catalog
+
+
+def resid_general_sampling_function(Args, catalog):
+    """Randomly picks entries from input catalog that are brighter than 25.3
+    mag in the i band. The centers are randomly distributed within 1/5 of the
+    stamp size.
+    Atleast one bright galaxy (i<=24) is always selected.
+    """
+    number_of_objects = np.random.randint(0, Args.max_number)
+    a = np.hypot(catalog['a_d'], catalog['a_b'])
+    cond = (a <= 1.4) & (a > 0.6)
+    q_bright, = np.where(cond & (catalog['i_ab'] <= 24))
+    if np.random.random() >= 0.9:
+        q, = np.where(cond & (catalog['i_ab'] < 28))
+    else:
+        q, = np.where(cond & (catalog['i_ab'] <= 25.3))
+    blend_catalog = vstack([catalog[np.random.choice(q_bright, size=1)],
+                            catalog[np.random.choice(q,
+                                                     size=number_of_objects)]])
+    blend_catalog['ra'], blend_catalog['dec'] = 0., 0.
+    dx, dy = get_random_shift(Args, number_of_objects + 1)
+    blend_catalog['ra'] += dx
+    blend_catalog['dec'] += dy
     return blend_catalog
 
 
@@ -241,8 +265,6 @@ class Scarlet_resid_params(btk.measure.Measurement_params):
     def get_deblended_images(self, data, index):
         """Returns scarlet modeled blend  and centers for the given blend"""
         images = np.transpose(data['blend_images'][index], axes=(2, 0, 1))
-        #print(np.sum(images, axis=1).sum(axis=1))
-        #print(data['obs_condition'][3].mean_sky_level)
         blend_cat = data['blend_list'][index]
         if self.detect_centers:
             peaks = self.get_centers(images)
@@ -262,9 +284,20 @@ class ResidDataset(utils.Dataset):
     shapes (triangles, squares, circles) placed randomly on a blank surface.
     The images are generated on the fly. No file access required.
     """
-    def __init__(self, meas_generator, *args, **kwargs):
+    def __init__(self, meas_generator, norm_val=None,
+                 *args, **kwargs):
         super(ResidDataset, self).__init__(*args, **kwargs)
         self.meas_generator = meas_generator
+        if norm_val:
+            self.mean1 = norm_val[0]
+            self.std1 = norm_val[1]
+            self.mean2 = norm_val[2]
+            self.std2 = norm_val[3]
+        else:
+            self.mean1 = 1.6361405416087091
+            self.std1 = 416.16687641284665
+            self.mean2 = 63.16814480535191
+            self.std2 = 2346.133101333463
 
     def load_data(self, training=True, count=None):
         """loads training and test input and output data
@@ -296,7 +329,7 @@ class ResidDataset(utils.Dataset):
 
     def load_input(self, image_id):
         """Generates image + bbox for undetected objects if any"""
-        output, deb, _= next(self.meas_generator)
+        output, deb, _ = next(self.meas_generator)
         blend_images = output['blend_images'][0]
         blend_list = output['blend_list'][0]
         obs_cond = output['obs_condition']
@@ -305,12 +338,8 @@ class ResidDataset(utils.Dataset):
         self.det_cent = detected_centers
         self.true_cent = np.stack([blend_list['dx'], blend_list['dy']]).T
         resid_images = blend_images - model_images
-        mean1 = 1.6361405416087091
-        std1 = 416.16687641284665
-        mean2 = 63.16814480535191
-        std2 = 2346.133101333463
-        resid_images = (resid_images - mean1)/std1
-        model_images = (model_images - mean2)/std2
+        resid_images = (resid_images - self.mean1)/self.std1
+        model_images = (model_images - self.mean2)/self.std2
         input_image = np.dstack([resid_images, model_images])
         x, y, h = get_undetected(blend_list, detected_centers,
                                  obs_cond[3])
