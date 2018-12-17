@@ -49,35 +49,18 @@ def get_btk_generator(sampling_function=None):
 
 def main(Args):
     """Test performance for btk input blends"""
-    meas_generator = get_btk_generator()
-    file_name = "train" + Args.model_name
+    count = 4000
+    catalog_name = os.path.join("/scratch/users/sowmyak/data", 'OneDegSq.fits')
+    resid_model = btk_utils.Resid_metrics_model()
+    resid_model.make_resid_model(Args.model_name, Args.model_path,
+                                 MODEL_DIR, catalog_name, count=count,
+                                 sampling_function=None, max_number=2)
     results = []
-    train = __import__(file_name)
-
-    class InferenceConfig(train.InputConfig):
-        GPU_COUNT = 1
-        IMAGES_PER_GPU = 1
-    dataset_val = btk_utils.ResidDataset(meas_generator)
-    dataset_val.load_data(training=False)
-    dataset_val.prepare()
-    inference_config = InferenceConfig()
-    model = modellib.MaskRCNN(mode="inference",
-                              config=inference_config,
-                              model_dir=MODEL_DIR)
-    print("Loading weights from ", Args.model_path)
-    model.load_weights(Args.model_path, by_name=True)
-    for im_id in range(4000):
-        image1, image_meta1, gt_class_id1, gt_bbox1 =\
-            modellib.load_image_gt(dataset_val, inference_config,
-                                   (im_id), use_mini_mask=False)
-        true_cent = dataset_val.true_cent
-        det_cent = dataset_val.det_cent
-        results1 = model.detect([image1], verbose=0)
-        r1 = results1[0]
-        detected_centers = btk_utils.resid_merge_centers(det_cent, r1['rois'])
+    for im_id in range(count):
+        detected_centers, true_centers = resid_model.get_detections(im_id)
         det, undet, spur = btk.compute_metrics.evaluate_detection(
-            detected_centers, true_cent)
-        results.append([len(true_cent), det, undet, spur])
+            detected_centers, true_centers)
+        results.append([len(true_centers), det, undet, spur])
     arr_results = np.array(results).T
     print("Results: ", np.sum(arr_results, axis=1))
     save_file_name = f"detection_results_{Args.model_name}.txt"
