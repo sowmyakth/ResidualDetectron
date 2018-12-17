@@ -19,7 +19,7 @@ sys.path.append(MRCNN_DIR)  # To find local version of the library
 import mrcnn.model_w_btk as modellib
 
 
-def get_btk_generator():
+def get_btk_generator(sampling_function=None):
     # Input catalog name
     catalog_name = os.path.join("/scratch/users/sowmyak/data", 'OneDegSq.fits')
     # Load parameters
@@ -28,9 +28,13 @@ def get_btk_generator():
     np.random.seed(param.seed)
     # Load input catalog
     catalog = btk.get_input_catalog.load_catlog(param)
-    # Generate catlogs of blended objects
-    blend_generator = btk.create_blend_generator.generate(
-        param, catalog, btk_utils.resid_general_sampling_function)
+    # Generate catalogs of blended objects
+    if sampling_function:
+        blend_generator = btk.create_blend_generator.generate(
+            param, catalog, sampling_function)
+    else:
+        blend_generator = btk.create_blend_generator.generate(
+            param, catalog, btk_utils.resid_general_sampling_function)
     # Generates observing conditions for the selected survey_name & all bands
     observing_generator = btk.create_observing_generator.generate(
         param, btk_utils.resid_obs_conditions)
@@ -44,7 +48,7 @@ def get_btk_generator():
 
 
 def main(Args):
-    """Test peformance for btk input blends"""
+    """Test performance for btk input blends"""
     meas_generator = get_btk_generator()
     file_name = "train" + Args.model_name
     results = []
