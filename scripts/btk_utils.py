@@ -29,7 +29,7 @@ def get_ax(rows=1, cols=1, size=4):
 
 def resid_merge_centers(det_cent, bbox, distance_upper_bound=1):
     """Combines centers from detection algorithm and iteratively
-    detected centers
+    detected centers. Also corrects for shift of 4 pixels in center
     Args:
         det_cent: centers detected by detection algorithm.
         bbox: Edges of ResidDetectron bounding box (y1, x1, y2, x2).
