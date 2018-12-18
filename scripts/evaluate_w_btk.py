@@ -13,11 +13,6 @@ CODE_PATH = '/home/users/sowmyak/ResidualDetectron/scripts'
 sys.path.append(CODE_PATH)
 import btk_utils
 
-# Import Mask RCNN
-MRCNN_DIR = '/home/users/sowmyak/ResidualDetectron'
-sys.path.append(MRCNN_DIR)  # To find local version of the library
-import mrcnn.model_w_btk as modellib
-
 
 def get_btk_generator(sampling_function=None):
     # Input catalog name
