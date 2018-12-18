@@ -49,12 +49,14 @@ def main(Args):
     resid_model = btk_utils.Resid_metrics_model()
     resid_model.make_resid_model(Args.model_name, Args.model_path,
                                  MODEL_DIR, catalog_name, count=count,
-                                 sampling_function=None, max_number=2)
+                                 max_number=2)
     results = []
+    np.random.seed(0)
     for im_id in range(count):
         detected_centers, true_centers = resid_model.get_detections(im_id)
         det, undet, spur = btk.compute_metrics.evaluate_detection(
             detected_centers, true_centers)
+        print(det, undet, spur)
         results.append([len(true_centers), det, undet, spur])
     arr_results = np.array(results).T
     print("Results: ", np.sum(arr_results, axis=1))
