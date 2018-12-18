@@ -304,9 +304,7 @@ class ResidDataset(utils.Dataset):
         Keyword Arguments:
             filename -- Numpy file where data is saved
         """
-        if training:
-            count = 8000
-        else:
+        if not count:
             count = 240
         self.load_objects(count, training)
         print("Loaded {} blends".format(count))
@@ -357,15 +355,21 @@ class ResidDataset(utils.Dataset):
             super(self.__class__).image_reference(self, image_id)
 
 
-class Resid_metrics_param(btk.compute_metrics.Metrics_params):
+class Resid_metrics_model(btk.compute_metrics.Metrics_params):
 
     def make_resid_model(self, model_name, model_path,
-                         model_dir, catalog_name):
+                         model_dir, catalog_name, count=256,
+                         sampling_function=None, max_number=2):
         file_name = "train" + model_name
         train = __import__(file_name)
-        self.meas_generator = self.make_meas_generator(catalog_name)
+        # If no user input sampling function then set default function
+        if not sampling_function:
+            sampling_function = resid_general_sampling_function
+        self.meas_generator = self.make_meas_generator(catalog_name,
+                                                       max_number,
+                                                       sampling_function)
         self.dataset_val = ResidDataset(self.meas_generator)
-        self.dataset_val.load_data(training=False)
+        self.dataset_val.load_data(training=False, count=count)
         self.dataset_val.prepare()
 
         class InferenceConfig(train.InputConfig):
@@ -379,20 +383,21 @@ class Resid_metrics_param(btk.compute_metrics.Metrics_params):
         print("Loading weights from ", model_path)
         self.model.load_weights(model_path, by_name=True)
 
-    def make_meas_generator(self, catalog_name):
+    def make_meas_generator(self, catalog_name, max_number,
+                            sampling_function):
         """
         Creates the default btk.meas_generator for input catalog
         Overwrite this function for user defined measurement generator
         """
         # Load parameters
         param = btk.config.Simulation_params(
-            catalog_name, max_number=2, batch_size=1, seed=199)
+            catalog_name, max_number=max_number, batch_size=1, seed=199)
         np.random.seed(param.seed)
         # Load input catalog
         catalog = btk.get_input_catalog.load_catlog(param)
         # Generate catalogs of blended objects
         blend_generator = btk.create_blend_generator.generate(
-            param, catalog, resid_sampling_function)
+            param, catalog, sampling_function)
         # Generates observing conditions
         observing_generator = btk.create_observing_generator.generate(
             param, resid_obs_conditions)
