@@ -38,7 +38,7 @@ def get_btk_generator():
     np.random.seed(param.seed)
     # Load input catalog
     catalog = btk.get_input_catalog.load_catlog(param)
-    # Generate catlogs of blended objects
+    # Generate catalogs of blended objects
     blend_generator = btk.create_blend_generator.generate(
         param, catalog, btk_utils.resid_general_sampling_function)
     # Generates observing conditions for the selected survey_name & all bands
@@ -54,7 +54,7 @@ def get_btk_generator():
 
 
 def run_sep():
-    """Test peformance for btk input blends"""
+    """Test performance for btk input blends"""
     meas_generator = get_btk_generator()
     results = []
     np.random.seed(0)
