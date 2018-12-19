@@ -1,1 +1,3 @@
 theme: jekyll-theme-cayman
+title: [ResidualDetectron]
+description: [Runs MaskR-CNN (Detectron) on residual of a source separation algorithm to identify undetected sources]
