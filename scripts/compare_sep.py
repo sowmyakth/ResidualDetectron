@@ -5,14 +5,13 @@ import numpy as np
 BTK_PATH = '/home/users/sowmyak/BlendingToolKit/'
 sys.path.insert(0, BTK_PATH)
 import btk
-
+CODE_PATH = '/home/users/sowmyak/ResidualDetectron/scripts'
+sys.path.append(CODE_PATH)
+import btk_utils
 # Directory to save logs and trained model
 MODEL_DIR = '/scratch/users/sowmyak/resid/logs'
 # path to images
 DATA_PATH = '/scratch/users/sowmyak/resid/data'
-CODE_PATH = '/home/users/sowmyak/ResidualDetectron/scripts'
-sys.path.append(CODE_PATH)
-import btk_utils
 
 
 class Sep_params(btk.measure.Measurement_params):
@@ -24,8 +23,8 @@ class Sep_params(btk.measure.Measurement_params):
 
     def get_deblended_images(self, data, index):
         """Returns scarlet modeled blend  and centers for the given blend"""
-        images = np.transpose(data['blend_images'][index], axes=(2, 0, 1))
-        peaks = self.get_centers(images)
+        image = np.transpose(data['blend_images'][index], axes=(2, 0, 1))
+        peaks = self.get_centers(image)
         return [None, peaks]
 
 
