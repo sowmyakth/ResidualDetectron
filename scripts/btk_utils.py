@@ -1,5 +1,5 @@
 """Contains functions to perform detection, deblending and measurement
-    on images.
+    on images with BlendingToolKit(btk).
 """
 import sys
 import sep
@@ -58,7 +58,26 @@ def resid_merge_centers(det_cent, bbox, distance_upper_bound=1):
 
 
 def get_undetected(true_cat, meas_cent, obs_cond, distance_upper_bound=10):
-    """Returns bbox of galaxy that is undetected"""
+    """Returns bounding boxes for galaxies that were undetected. The bounding
+    boxes are square with height set as twice the PSF convolved HLR. Since
+    CatSim catalog has separate bulge and disk parameters, the galaxy HLR is
+    approximated as the flux weighted average of bulge and disk HLR.
+
+    The function returns the x and y coordinates of the lower left corner of
+    box, and the height of each undetected galaxy. A galaxy is marked as
+    undetected if no detected center lies within distance_upper_bound of it's
+    true center.
+    Args:
+        true_cat: CatSim-like catalog of true galaxies.
+        meas_cent: ndarray of x and y coordinates of detected centers.
+        obs_cond: wld.survey class corresponding to observing conditions in the
+                  band in which PSF convolved HLR is to be estimated.
+        distance_upper_bound: Distance up-to which a detected center can be
+                              matched to a true center.
+    Returns:
+        Bounding box of undetected galaxies
+
+    """
     psf_sigma = obs_cond.psf_sigma_m
     pixel_scale = obs_cond.pixel_scale
     peaks = np.stack([true_cat['dx'], true_cat['dy']]).T
@@ -120,7 +139,7 @@ def resid_general_sampling_function(Args, catalog):
     """Randomly picks entries from input catalog that are brighter than 25.3
     mag in the i band. The centers are randomly distributed within 1/5 of the
     stamp size.
-    Atleast one bright galaxy (i<=24) is always selected.
+    At least one bright galaxy (i<=24) is always selected.
     """
     number_of_objects = np.random.randint(0, Args.max_number)
     a = np.hypot(catalog['a_d'], catalog['a_b'])
