@@ -123,10 +123,11 @@ def resid_sampling_function(Args, catalog):
                             catalog[np.random.choice(q,
                                                      size=number_of_objects)]])
     blend_catalog['ra'], blend_catalog['dec'] = 0., 0.
-    dx, dy = get_random_shift(Args, 1, maxshift=3*0.2)
+    # Add small shift so that center does not perfectly align with stamp center
+    dx, dy = get_random_shift(Args, 1, maxshift=3*Args.pixel_scale)
     blend_catalog['ra'] += dx
     blend_catalog['dec'] += dy
-    dr = np.random.uniform(3, 10)*0.2
+    dr = np.random.uniform(3, 10)*Args.pixel_scale
     theta = np.random.uniform(0, 360) * np.pi / 180.
     dx2 = dr * np.cos(theta)
     dy2 = dr * np.sin(theta)
@@ -175,6 +176,40 @@ def new_sampling_function(Args, catalog):
     dx, dy = get_random_shift(Args, number_of_objects + 1)
     blend_catalog['ra'] += dx
     blend_catalog['dec'] += dy
+    return blend_catalog
+
+
+def group_sampling_function(Args, catalog):
+    """Blends are defined from *groups* of galaxies from the Cat-Sim like
+    catalog previously analyzed with WLD. Function selects galaxies
+    Note: the pre-run WLD images are not used here. We only use the pre-run
+    catalog (in i band) to identify galaxies that belong to a group.
+
+    Randomly picks entries from input catalog that are brighter than 25.3
+    mag in the i band. The centers are randomly distributed within 1/5 of the
+    stamp size.
+    """
+    if not hasattr(Args, 'wld_catalog'):
+        raise Exception(
+            "A pre-run WLD catalog should be input as Args.wld_catalog")
+    else:
+        wld_catalog = Args.wld_catalog
+    group_ids = np.unique(wld_catalog['grp_id'])
+    group_id = np.random.choice(group_ids)
+    ids = wld_catalog['grp_id']['db_id'][wld_catalog['grp_id'] == group_id]
+    blend_catalog = vstack([catalog[catalog['galtileid'] == i] for i in ids])
+    blend_catalog['ra'] -= np.mean(blend_catalog['ra'])
+    blend_catalog['dec'] -= np.mean(blend_catalog['dec'])
+    # convert ra dec from degrees to arcsec
+    blend_catalog['ra'] *= 3600
+    blend_catalog['dec'] *= 3600
+    # Add small shift so that center does not perfectly align with stamp center
+    dx, dy = get_random_shift(Args, 1, maxshift=3*Args.pixel_scale)
+    blend_catalog['ra'] += dx
+    blend_catalog['dec'] += dy
+    dist = np.hypot(blend_catalog['ra'], blend_catalog['dec'])
+    # make sure galaxy centers don't lie too close to edge
+    select, = np.where(dist < Args.stamp_size * (2/5.))
     return blend_catalog
 
 
