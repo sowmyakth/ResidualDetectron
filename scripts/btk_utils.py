@@ -209,8 +209,8 @@ def group_sampling_function(Args, catalog):
     blend_catalog['dec'] += dy
     dist = np.hypot(blend_catalog['ra'], blend_catalog['dec'])
     # make sure galaxy centers don't lie too close to edge
-    select, = np.where(dist < Args.stamp_size * (2/5.))
-    return blend_catalog
+    select, = np.where(dist < Args.stamp_size/2. - 2)
+    return blend_catalog[select]
 
 
 def resid_obs_conditions(Args, band):
