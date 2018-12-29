@@ -196,7 +196,7 @@ def group_sampling_function(Args, catalog):
         wld_catalog = Args.wld_catalog
     group_ids = np.unique(wld_catalog['grp_id'])
     group_id = np.random.choice(group_ids)
-    ids = wld_catalog['grp_id']['db_id'][wld_catalog['grp_id'] == group_id]
+    ids = wld_catalog['db_id'][wld_catalog['grp_id'] == group_id]
     blend_catalog = vstack([catalog[catalog['galtileid'] == i] for i in ids])
     blend_catalog['ra'] -= np.mean(blend_catalog['ra'])
     blend_catalog['dec'] -= np.mean(blend_catalog['dec'])
