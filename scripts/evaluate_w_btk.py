@@ -14,34 +14,6 @@ sys.path.append(CODE_PATH)
 import btk_utils
 
 
-def get_btk_generator(sampling_function=None):
-    # Input catalog name
-    catalog_name = os.path.join("/scratch/users/sowmyak/data", 'OneDegSq.fits')
-    # Load parameters
-    param = btk.config.Simulation_params(
-        catalog_name, max_number=2, batch_size=1, seed=199)
-    np.random.seed(param.seed)
-    # Load input catalog
-    catalog = btk.get_input_catalog.load_catlog(param)
-    # Generate catalogs of blended objects
-    if sampling_function:
-        blend_generator = btk.create_blend_generator.generate(
-            param, catalog, sampling_function)
-    else:
-        blend_generator = btk.create_blend_generator.generate(
-            param, catalog, btk_utils.resid_general_sampling_function)
-    # Generates observing conditions for the selected survey_name & all bands
-    observing_generator = btk.create_observing_generator.generate(
-        param, btk_utils.resid_obs_conditions)
-    # Generate images of blends in all the observing bands
-    draw_blend_generator = btk.draw_blends.generate(
-        param, blend_generator, observing_generator)
-    meas_params = btk_utils.Scarlet_resid_params()
-    meas_generator = btk.measure.generate(
-        meas_params, draw_blend_generator, param)
-    return meas_generator
-
-
 def main(Args):
     """Test performance for btk input blends"""
     count = 4000
