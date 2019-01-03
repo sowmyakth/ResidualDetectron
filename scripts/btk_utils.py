@@ -179,7 +179,7 @@ def new_sampling_function(Args, catalog):
     return blend_catalog
 
 
-def group_sampling_function(Args, catalog, min_group_size=3):
+def group_sampling_function(Args, catalog, min_group_size=5):
     """Blends are defined from *groups* of galaxies from the Cat-Sim like
     catalog previously analyzed with WLD. Function selects galaxies
     Note: the pre-run WLD images are not used here. We only use the pre-run
@@ -223,7 +223,7 @@ def group_sampling_function(Args, catalog, min_group_size=3):
 def basic_selection_function(catalog):
     """Apply selection cuts to the input catalog"""
     a = np.hypot(catalog['a_d'], catalog['a_b'])
-    q, = np.where((a <= 2) & (catalog['i_ab'] <= 27))
+    q, = np.where((a <= 2) & (catalog['i_ab'] <= 28))
     return catalog[q]
 
 
@@ -423,13 +423,30 @@ class ResidDataset(utils.Dataset):
             super(self.__class__).image_reference(self, image_id)
 
 
-class Resid_metrics_model(btk.compute_metrics.Metrics_params):
-
-    def make_resid_model(self, model_name, model_path,
-                         model_dir, catalog_name, count=256,
-                         sampling_function=None, max_number=2):
+class Resid_btk_model(btk.compute_metrics.Metrics_params):
+    def __init__(self,  model_name, model_path, output_dir,
+                 training=False, new_model_name=None, images_per_gpu=1,
+                 *args, **kwargs):
+        super(Resid_btk_model, self).__init__(*args, **kwargs)
+        self.training = training
+        self.model_path = model_path
+        self.output_dir = output_dir
         file_name = "train" + model_name
         train = __import__(file_name)
+
+        class InferenceConfig(train.InputConfig):
+            GPU_COUNT = 1
+            IMAGES_PER_GPU = images_per_gpu
+            if new_model_name:
+                NAME = new_model_name
+
+        self.config = InferenceConfig()
+        self.images_per_gpu = images_per_gpu
+
+    def make_resid_model(self, catalog_name, count=256,
+                         sampling_function=None, max_number=2,
+                         ):
+
         # If no user input sampling function then set default function
         if not sampling_function:
             sampling_function = resid_general_sampling_function
@@ -439,30 +456,40 @@ class Resid_metrics_model(btk.compute_metrics.Metrics_params):
         self.dataset_val = ResidDataset(self.meas_generator)
         self.dataset_val.load_data(training=False, count=count)
         self.dataset_val.prepare()
-
-        class InferenceConfig(train.InputConfig):
-            GPU_COUNT = 1
-            IMAGES_PER_GPU = 1
-
-        self.inference_config = InferenceConfig()
-        self.model = model_btk.MaskRCNN(mode="inference",
-                                        config=self.inference_config,
-                                        model_dir=model_dir)
-        print("Loading weights from ", model_path)
-        self.model.load_weights(model_path, by_name=True)
+        if self.training:
+            self.model = model_btk.MaskRCNN(mode="training",
+                                            config=self.config,
+                                            model_dir=self.output_dir)
+        else:
+            self.model = model_btk.MaskRCNN(mode="inference",
+                                            config=self.config,
+                                            model_dir=self.output_dir)
+        print("Loading weights from ", self.model_path)
+        self.model.load_weights(self.model_path, by_name=True)
 
     def make_meas_generator(self, catalog_name, max_number,
-                            sampling_function):
+                            sampling_function, selection_function=None,
+                            wld_catalog=None):
         """
         Creates the default btk.meas_generator for input catalog
-        Overwrite this function for user defined measurement generator
+        Overwrite this function for user defined measurement generator.
+        Args:
+            catalog_name: CatSim like catalog to draw galaxies from.
+            max_number: Maximum number of galaxies per blend.
+            sampling_function: Function describing how galaxies are drawn from
+                               catalog_name.
+            wld_catalog: A WLD pre-run astropy table. Used if sampling function
+                         requires grouped objects.
         """
         # Load parameters
         param = btk.config.Simulation_params(
             catalog_name, max_number=max_number, batch_size=1, seed=199)
+        if wld_catalog:
+            param.wld_catalog = wld_catalog
         np.random.seed(param.seed)
         # Load input catalog
-        catalog = btk.get_input_catalog.load_catlog(param)
+        catalog = btk.get_input_catalog.load_catlog(
+            param, selection_function=selection_function)
         # Generate catalogs of blended objects
         blend_generator = btk.create_blend_generator.generate(
             param, catalog, sampling_function)
@@ -479,7 +506,7 @@ class Resid_metrics_model(btk.compute_metrics.Metrics_params):
 
     def get_detections(self, index):
         image, image_meta, gt_class_id, gt_bbox =\
-            model_btk.load_image_gt(self.dataset_val, self.inference_config,
+            model_btk.load_image_gt(self.dataset_val, self.config,
                                     (index), use_mini_mask=False)
         true_centers = self.dataset_val.true_cent
         in_detected_center = self.dataset_val.det_cent
