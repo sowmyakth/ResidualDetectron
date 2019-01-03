@@ -179,7 +179,7 @@ def new_sampling_function(Args, catalog):
     return blend_catalog
 
 
-def group_sampling_function(Args, catalog):
+def group_sampling_function(Args, catalog, min_group_size=3):
     """Blends are defined from *groups* of galaxies from the Cat-Sim like
     catalog previously analyzed with WLD. Function selects galaxies
     Note: the pre-run WLD images are not used here. We only use the pre-run
@@ -194,7 +194,8 @@ def group_sampling_function(Args, catalog):
             "A pre-run WLD catalog should be input as Args.wld_catalog")
     else:
         wld_catalog = Args.wld_catalog
-    group_ids = np.unique(wld_catalog['grp_id'])
+    group_ids = np.unique(
+        wld_catalog['grp_id'][wld_catalog['grp_size'] >= min_group_size])
     group_id = np.random.choice(group_ids)
     ids = wld_catalog['db_id'][wld_catalog['grp_id'] == group_id]
     blend_catalog = vstack([catalog[catalog['galtileid'] == i] for i in ids])
@@ -207,10 +208,23 @@ def group_sampling_function(Args, catalog):
     dx, dy = get_random_shift(Args, 1, maxshift=3*Args.pixel_scale)
     blend_catalog['ra'] += dx
     blend_catalog['dec'] += dy
-    dist = np.hypot(blend_catalog['ra'], blend_catalog['dec'])
     # make sure galaxy centers don't lie too close to edge
-    select, = np.where(dist < Args.stamp_size/2. - 2)
-    return blend_catalog[select]
+    cond1 = np.abs(blend_catalog['ra']) < Args.stamp_size/2. - 3
+    cond2 = np.abs(blend_catalog['dec']) < Args.stamp_size/2. - 3
+    no_boundary = blend_catalog[cond1 & cond2]
+    if len(no_boundary) == 0:
+        return no_boundary
+    # make sure number of galaxies in blend is less than Args.max_number
+    num = min([len(no_boundary), Args.max_number])
+    select = np.random.choice(range(len(no_boundary)), num, replace=False)
+    return no_boundary[select]
+
+
+def basic_selection_function(catalog):
+    """Apply selection cuts to the input catalog"""
+    a = np.hypot(catalog['a_d'], catalog['a_b'])
+    q, = np.where((a <= 2) & (catalog['i_ab'] <= 27))
+    return catalog[q]
 
 
 def resid_obs_conditions(Args, band):
