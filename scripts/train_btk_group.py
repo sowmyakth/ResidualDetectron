@@ -1,11 +1,8 @@
 # Script to train data
-##use utils.generate_anchors_no_spill
+#  #use utils.generate_anchors_no_spill
 import os
 import sys
-import numpy as np
-import h5py
 import dill
-import pandas as pd
 
 
 # Root directory of the project
@@ -22,17 +19,17 @@ import btk_utils
 
 def main(Args):
     """Test performance for btk input blends"""
-    count = 4000
+    count = 40000
     catalog_name = os.path.join("/scratch/users/sowmyak/data", 'OneDegSq.fits')
     resid_model = btk_utils.Resid_metrics_model(
         Args.model_name, Args.model_path, MODEL_DIR, training=True,
         new_model_name=Args.model_name + "_btk", images_per_gpu=8)
     resid_model.make_resid_model(catalog_name, count=count,
-                                 max_number=2)
+                                 max_number=10)
     learning_rate = resid_model.config.LEARNING_RATE
     history1 = resid_model.model.train(resid_model.dataset, None,
                                        learning_rate=learning_rate,
-                                       epochs=80,
+                                       epochs=20,
                                        layers='all')
     name = resid_model.config.NAME + '_run1_loss'
     with open(name + ".dill", 'wb') as handle:
