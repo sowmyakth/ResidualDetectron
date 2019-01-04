@@ -367,17 +367,17 @@ class ResidDataset(utils.Dataset):
             self.mean2 = 63.16814480535191
             self.std2 = 2346.133101333463
 
-    def load_data(self, training=True, count=None):
+    def load_data(self, count=None):
         """loads training and test input and output data
         Keyword Arguments:
             filename -- Numpy file where data is saved
         """
         if not count:
             count = 240
-        self.load_objects(count, training)
+        self.load_objects(count)
         print("Loaded {} blends".format(count))
 
-    def load_objects(self, count, training):
+    def load_objects(self, count):
         """Generate the requested number of synthetic images.
         count: number of images to generate.
         height, width: the size of the generated images.
@@ -453,13 +453,16 @@ class Resid_btk_model(btk.compute_metrics.Metrics_params):
         self.meas_generator = self.make_meas_generator(catalog_name,
                                                        max_number,
                                                        sampling_function)
-        self.dataset_val = ResidDataset(self.meas_generator)
-        self.dataset_val.load_data(training=False, count=count)
-        self.dataset_val.prepare()
+        self.dataset = ResidDataset(self.meas_generator)
+        self.dataset.load_data(count=count)
+        self.dataset.prepare()
         if self.training:
             self.model = model_btk.MaskRCNN(mode="training",
                                             config=self.config,
                                             model_dir=self.output_dir)
+            self.dataset_val = ResidDataset(self.meas_generator)
+            self.dataset_val.load_data(count=count)
+            self.dataset_val.prepare()
         else:
             self.model = model_btk.MaskRCNN(mode="inference",
                                             config=self.config,
@@ -505,11 +508,18 @@ class Resid_btk_model(btk.compute_metrics.Metrics_params):
         return meas_generator
 
     def get_detections(self, index):
+        """
+        Returns model detectected centers and true center for data entry index.
+        Args:
+            index: Index of dataset to perform detection on.
+        Returns:
+            x and y coordinates of detected and true centers.
+        Useful for evaluating model detection performance."""
         image, image_meta, gt_class_id, gt_bbox =\
-            model_btk.load_image_gt(self.dataset_val, self.config,
+            model_btk.load_image_gt(self.dataset, self.config,
                                     (index), use_mini_mask=False)
-        true_centers = self.dataset_val.true_cent
-        in_detected_center = self.dataset_val.det_cent
+        true_centers = self.dataset.true_cent
+        in_detected_center = self.dataset.det_cent
         results1 = self.model.detect([image], verbose=0)
         r1 = results1[0]
         detected_centers = resid_merge_centers(in_detected_center, r1['rois'])
