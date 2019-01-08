@@ -15,20 +15,35 @@ DATA_PATH = '/scratch/users/sowmyak/resid/data'
 
 
 class Sep_params(btk.measure.Measurement_params):
+    """Class containing functions to perform detection"""
     def get_centers(self, image):
+        """Returns x and y coordinates of object centroids detected by sep.
+        Detection is performed in the sum of all image bands.
+        Args:
+            image: multi-band image to perform detection on. ([#bands, x, y])
+        Returns:
+            x and y coordinates of detected centroids.
+        """
         detect = image.mean(axis=0)  # simple average for detection
         bkg = sep.Background(detect)
         catalog = sep.extract(detect, 1.5, err=bkg.globalrms)
         return np.stack((catalog['x'], catalog['y']), axis=1)
 
     def get_deblended_images(self, data, index):
-        """Returns scarlet modeled blend  and centers for the given blend"""
+        """Returns detected centers for the given blend
+        Args:
+            data: output from btk.draw_blends generator
+            index: index of blend in bacth_outputs to perform analysis on.
+        Returns:
+            deblended images and detected centers
+        """
         image = np.transpose(data['blend_images'][index], axes=(2, 0, 1))
         peaks = self.get_centers(image)
         return [None, peaks]
 
 
 def get_btk_generator():
+    """Returns btk.measure generator for default settings"""
     # Input catalog name
     catalog_name = os.path.join("/scratch/users/sowmyak/data", 'OneDegSq.fits')
     # Load parameters
