@@ -505,7 +505,7 @@ class Resid_btk_model(btk.compute_metrics.Metrics_params):
         self.dataset.prepare()
         if augmentation:
             self.config.BATCH_SIZE *= 4
-            self.IMAGES_PER_GPU *= 4
+            self.config.IMAGES_PER_GPU *= 4
         if self.training:
             self.model = model_btk.MaskRCNN(mode="training",
                                             config=self.config,
