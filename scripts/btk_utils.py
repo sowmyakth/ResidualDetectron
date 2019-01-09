@@ -347,6 +347,18 @@ class Scarlet_resid_params(btk.measure.Measurement_params):
         return [model, selected_peaks]
 
 
+def augment_bbox(bboxes, stamp_size):
+    mult_x = [0, 0, 1, 1]
+    mult_y = [0, 1, 0, 1]
+    h0 = np.sum(bboxes[:, 1::2], axis=1) / 2.
+    x0 = np.mean(bboxes[:, 1::2], axis=1)
+    y0 = np.mean(bboxes[:, ::2], axis=1)
+    new_x0 = np.abs(stamp_size*mult_x - x0)
+    new_y0 = np.abs(stamp_size*mult_y - y0)
+    aug_bbox = np.array([new_y0 - h0, new_x0 - h0, new_y0 + h0, new_y0 + h0]).T
+    return aug_bbox
+
+
 class ResidDataset(utils.Dataset):
     """Generates the shapes synthetic dataset. The dataset consists of simple
     shapes (triangles, squares, circles) placed randomly on a blank surface.
@@ -399,8 +411,15 @@ class ResidDataset(utils.Dataset):
         images[:, :, :, 6:12] = (images[:, :, :, 6:12] - self.mean2)/self.std2
         return images
 
-    def augment_data(self, images, xs, ys, hs):
+    def augment_data(self, images, bboxes, class_ids):
         """Performs data augmentation by performing rotatioon and reflection"""
+        aug_image = np.concatenate([images[:, :, :, :],
+                                    images[:, :, ::-1, :],
+                                    images[:, ::-1, :, :],
+                                    images[:, ::-1, ::-1, :]])
+        aug_bbox = augment_bbox(bboxes, images.shape[1])
+        aug_class = np.dstack([class_ids, class_ids, class_ids, class_ids])
+        return aug_image, aug_bbox, aug_class
 
     def load_input(self):
         """Generates image + bbox for undetected objects if any"""
