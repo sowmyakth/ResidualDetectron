@@ -348,24 +348,6 @@ class Scarlet_resid_params(btk.measure.Measurement_params):
         return [model, selected_peaks]
 
 
-def augment_bbox(bboxes, stamp_size):
-    mult_x = np.array([0, 1, 1])
-    mult_y = np.array([1, 0, 1])
-    h0 = (bboxes[:, :, 2] - bboxes[:, :, 0]) / 2.
-    x0 = np.mean(bboxes[:, :, 1::2], axis=2)
-    y0 = np.mean(bboxes[:, :, ::2], axis=2)
-    for i in range(len(mult_x)):
-        new_x0 = np.abs(stamp_size*mult_x[i] - x0)
-        new_y0 = np.abs(stamp_size*mult_y[i] - y0)
-        new_x0[x0 == 0.5] = 0.5
-        new_y0[x0 == 0.5] = 0.5
-        new_bbox = np.array(
-            [new_y0 - h0, new_x0 - h0, new_y0 + h0, new_y0 + h0])
-        new_bbox = np.transpose(new_bbox, axes=(1, 2, 0,))
-        bboxes = np.concatenate((bboxes, new_bbox))
-    return bboxes
-
-
 class ResidDataset(utils.Dataset):
     """Generates the shapes synthetic dataset. The dataset consists of simple
     shapes (triangles, squares, circles) placed randomly on a blank surface.
@@ -418,19 +400,37 @@ class ResidDataset(utils.Dataset):
         images[:, :, :, 6:12] = (images[:, :, :, 6:12] - self.mean2)/self.std2
         return images
 
+    def augment_bbox(self, bboxes, stamp_size):
+        mult_y = np.array([0, 1, 1])
+        mult_x = np.array([1, 0, 1])
+        h0 = (bboxes[:, :, 2] - bboxes[:, :, 0]) / 2.
+        x0 = np.mean(bboxes[:, :, 1::2], axis=2)
+        y0 = np.mean(bboxes[:, :, ::2], axis=2)
+        for i in range(len(mult_x)):
+            new_x0 = np.abs(stamp_size*mult_x[i] - x0)
+            new_y0 = np.abs(stamp_size*mult_y[i] - y0)
+            new_x0[x0 == 0.5] = 0.5
+            new_y0[x0 == 0.5] = 0.5
+            new_bbox = np.array(
+                [new_y0 - h0, new_x0 - h0, new_y0 + h0, new_x0 + h0])
+            new_bbox = np.transpose(new_bbox, axes=(1, 2, 0,))
+            bboxes = np.concatenate((bboxes, new_bbox))
+        return bboxes
+
     def augment_data(self, images, bboxes, class_ids):
         """Performs data augmentation by performing rotatioon and reflection"""
         aug_image = np.concatenate([images[:, :, :, :],
                                     images[:, :, ::-1, :],
                                     images[:, ::-1, :, :],
                                     images[:, ::-1, ::-1, :]])
-        aug_bbox = augment_bbox(bboxes, images.shape[1])
+        aug_bbox = self.augment_bbox(bboxes, images.shape[1])
         aug_class = np.concatenate([class_ids, class_ids, class_ids, class_ids])
         return aug_image, aug_bbox, aug_class
 
     def load_input(self):
         """Generates image + bbox for undetected objects if any"""
         output, deb, _ = next(self.meas_generator)
+        self.batch_blend_list = output['blend_list']
         obs_cond = output['obs_condition']
         input_images, input_bboxes, input_class_ids = [], [], []
         self.det_cent, self.true_cent = [], []
@@ -448,6 +448,7 @@ class ResidDataset(utils.Dataset):
                                      obs_cond[3])
             bbox = np.array([y, x, y+h, x+h]).T
             bbox = np.concatenate((bbox, [[0, 0, 1, 1]]))
+            print(input_bboxes)
             input_bboxes.append(bbox)
             class_ids = np.concatenate((np.ones(len(x)), [0]))
             input_class_ids.append(class_ids)
