@@ -13,8 +13,8 @@ from astropy.table import vstack
 ROOT_DIR = '/home/users/sowmyak/ResidualDetectron'
 sys.path.append(ROOT_DIR)  # To find local version of the library
 from mrcnn import utils
-import mrcnn.model_w_btk as model_btk
-
+#import mrcnn.model_w_btk as model_btk
+import mrcnn.model_btk_only as model_btk
 
 def get_ax(rows=1, cols=1, size=4):
     """Return a Matplotlib Axes array to be used in
@@ -356,6 +356,7 @@ class ResidDataset(utils.Dataset):
                  *args, **kwargs):
         super(ResidDataset, self).__init__(*args, **kwargs)
         self.meas_generator = meas_generator
+        self.augmentation = False
         if norm_val:
             self.mean1 = norm_val[0]
             self.std1 = norm_val[1]
@@ -393,26 +394,45 @@ class ResidDataset(utils.Dataset):
             self.add_image("resid", image_id=i, path=None,
                            object="object")
 
-    def load_input(self, image_id):
+    def normalize_images(self, images):
+        images[:, :, :, 0:6] = (images[:, :, :, 0:6] - self.mean1)/self.std1
+        images[:, :, :, 6:12] = (images[:, :, :, 6:12] - self.mean2)/self.std2
+        return images
+
+    def augment_data(self, images, xs, ys, hs):
+        """Performs data augmentation by performing rotatioon and reflection"""
+
+    def load_input(self):
         """Generates image + bbox for undetected objects if any"""
         output, deb, _ = next(self.meas_generator)
-        blend_images = output['blend_images'][0]
-        blend_list = output['blend_list'][0]
         obs_cond = output['obs_condition']
-        model_images = deb[0][0]
-        detected_centers = deb[0][1]
-        self.det_cent = detected_centers
-        self.true_cent = np.stack([blend_list['dx'], blend_list['dy']]).T
-        resid_images = blend_images - model_images
-        resid_images = (resid_images - self.mean1)/self.std1
-        model_images = (model_images - self.mean2)/self.std2
-        input_image = np.dstack([resid_images, model_images])
-        x, y, h = get_undetected(blend_list, detected_centers,
-                                 obs_cond[3])
-        bbox = [[4, 4, 5, 5]]
-        bbox += [[y[i] + 4, x[i] + 4, y[i] + h[i] + 4, x[i] + h[i] + 4] for i in range(len(x))]
-        class_id = np.array([0] + [1]*len(x))
-        return input_image, np.array(bbox, dtype=np.int32), class_id
+        input_images, input_bboxes, input_class_ids = [], [], []
+        self.det_cent, self.true_cent = [], []
+        for i in range(len(output['blend_list'])):
+            blend_images = output['blend_images'][i]
+            blend_list = output['blend_list'][i]
+            model_images = deb[i][0]
+            detected_centers = deb[i][1]
+            self.det_cent.append(detected_centers)
+            self.true_cent.append(
+                np.stack([blend_list['dx'], blend_list['dy']]).T)
+            resid_images = blend_images - model_images
+            input_images.append(np.dstack([resid_images, model_images]))
+            x, y, h = get_undetected(blend_list, detected_centers,
+                                     obs_cond[3])
+            bbox = np.squeeze(np.array([y, x, y+h, x+h])).T
+            input_bboxes.append(bbox)
+            input_class_ids.append(np.ones(len(x)))
+        input_images = np.array(input_images, dtype=np.float32)
+        input_images = self.normalize_images(input_images)
+        input_bboxes = np.array(input_bboxes, dtype=np.int32)
+        input_class_ids = np.array(input_class_ids, dtype=np.int32)
+        if self.augmentation:
+            input_images, input_bboxes, input_class_ids = self.augment_data(
+                input_images, input_bboxes, input_class_ids)
+        input_class_ids.append([0])
+        input_bboxes.append([0, 0, 1, 1])
+        return input_images, input_bboxes, input_class_ids
 
     def image_reference(self, image_id):
         """Return the shapes data of the image."""
@@ -441,7 +461,8 @@ class Resid_btk_model(btk.compute_metrics.Metrics_params):
                 NAME = new_model_name
 
         self.config = InferenceConfig()
-        self.images_per_gpu = images_per_gpu
+        self.config.display()
+        print(self.config.IMAGE_SHAPE)
 
     def make_resid_model(self, catalog_name, count=256,
                          sampling_function=None, max_number=2,
@@ -460,6 +481,7 @@ class Resid_btk_model(btk.compute_metrics.Metrics_params):
             self.model = model_btk.MaskRCNN(mode="training",
                                             config=self.config,
                                             model_dir=self.output_dir)
+            self.dataset.augmentation = True
             self.dataset_val = ResidDataset(self.meas_generator)
             self.dataset_val.load_data(count=count)
             self.dataset_val.prepare()
@@ -486,12 +508,13 @@ class Resid_btk_model(btk.compute_metrics.Metrics_params):
         """
         # Load parameters
         param = btk.config.Simulation_params(
-            catalog_name, max_number=max_number, batch_size=1, seed=199)
+            catalog_name, max_number=max_number, stamp_size=25.6,
+            batch_size=self.config.BATCH_SIZE, seed=199)
         if wld_catalog:
             param.wld_catalog = wld_catalog
         np.random.seed(param.seed)
         # Load input catalog
-        catalog = btk.get_input_catalog.load_catlog(
+        catalog = btk.get_input_catalog.load_catalog(
             param, selection_function=selection_function)
         # Generate catalogs of blended objects
         blend_generator = btk.create_blend_generator.generate(
