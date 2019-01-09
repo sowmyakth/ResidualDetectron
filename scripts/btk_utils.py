@@ -348,15 +348,21 @@ class Scarlet_resid_params(btk.measure.Measurement_params):
 
 
 def augment_bbox(bboxes, stamp_size):
-    mult_x = [0, 0, 1, 1]
-    mult_y = [0, 1, 0, 1]
-    h0 = np.sum(bboxes[:, 1::2], axis=1) / 2.
-    x0 = np.mean(bboxes[:, 1::2], axis=1)
-    y0 = np.mean(bboxes[:, ::2], axis=1)
-    new_x0 = np.abs(stamp_size*mult_x - x0)
-    new_y0 = np.abs(stamp_size*mult_y - y0)
-    aug_bbox = np.array([new_y0 - h0, new_x0 - h0, new_y0 + h0, new_y0 + h0]).T
-    return aug_bbox
+    mult_x = np.array([0, 1, 1])
+    mult_y = np.array([1, 0, 1])
+    h0 = (bboxes[:, :, 2] - bboxes[:, :, 0]) / 2.
+    x0 = np.mean(bboxes[:, :, 1::2], axis=2)
+    y0 = np.mean(bboxes[:, :, ::2], axis=2)
+    for i in range(len(mult_x)):
+        new_x0 = np.abs(stamp_size*mult_x[i] - x0)
+        new_y0 = np.abs(stamp_size*mult_y[i] - y0)
+        new_x0[x0 == 0.5] = 0.5
+        new_y0[x0 == 0.5] = 0.5
+        new_bbox = np.array(
+            [new_y0 - h0, new_x0 - h0, new_y0 + h0, new_y0 + h0])
+        new_bbox = np.transpose(new_bbox, axes=(1, 2, 0,))
+        bboxes = np.concatenate((bboxes, new_bbox))
+    return bboxes
 
 
 class ResidDataset(utils.Dataset):
@@ -365,10 +371,10 @@ class ResidDataset(utils.Dataset):
     The images are generated on the fly. No file access required.
     """
     def __init__(self, meas_generator, norm_val=None,
-                 *args, **kwargs):
+                 augmentation=False, *args, **kwargs):
         super(ResidDataset, self).__init__(*args, **kwargs)
         self.meas_generator = meas_generator
-        self.augmentation = False
+        self.augmentation = augmentation
         if norm_val:
             self.mean1 = norm_val[0]
             self.std1 = norm_val[1]
@@ -418,7 +424,7 @@ class ResidDataset(utils.Dataset):
                                     images[:, ::-1, :, :],
                                     images[:, ::-1, ::-1, :]])
         aug_bbox = augment_bbox(bboxes, images.shape[1])
-        aug_class = np.dstack([class_ids, class_ids, class_ids, class_ids])
+        aug_class = np.concatenate([class_ids, class_ids, class_ids, class_ids])
         return aug_image, aug_bbox, aug_class
 
     def load_input(self):
@@ -439,9 +445,11 @@ class ResidDataset(utils.Dataset):
             input_images.append(np.dstack([resid_images, model_images]))
             x, y, h = get_undetected(blend_list, detected_centers,
                                      obs_cond[3])
-            bbox = np.squeeze(np.array([y, x, y+h, x+h])).T
+            bbox = np.array([y, x, y+h, x+h]).T
+            bbox = np.concatenate((bbox, [[0, 0, 1, 1]]))
             input_bboxes.append(bbox)
-            input_class_ids.append(np.ones(len(x)))
+            class_ids = np.concatenate((np.ones(len(x)), [0]))
+            input_class_ids.append(class_ids)
         input_images = np.array(input_images, dtype=np.float32)
         input_images = self.normalize_images(input_images)
         input_bboxes = np.array(input_bboxes, dtype=np.int32)
@@ -449,8 +457,6 @@ class ResidDataset(utils.Dataset):
         if self.augmentation:
             input_images, input_bboxes, input_class_ids = self.augment_data(
                 input_images, input_bboxes, input_class_ids)
-        input_class_ids.append([0])
-        input_bboxes.append([0, 0, 1, 1])
         return input_images, input_bboxes, input_class_ids
 
     def image_reference(self, image_id):
@@ -480,12 +486,11 @@ class Resid_btk_model(btk.compute_metrics.Metrics_params):
                 NAME = new_model_name
 
         self.config = InferenceConfig()
-        self.config.display()
-        print(self.config.IMAGE_SHAPE)
+        # self.config.display()
 
     def make_resid_model(self, catalog_name, count=256,
                          sampling_function=None, max_number=2,
-                         ):
+                         augmentation=False):
 
         # If no user input sampling function then set default function
         if not sampling_function:
@@ -493,14 +498,14 @@ class Resid_btk_model(btk.compute_metrics.Metrics_params):
         self.meas_generator = self.make_meas_generator(catalog_name,
                                                        max_number,
                                                        sampling_function)
-        self.dataset = ResidDataset(self.meas_generator)
+        self.dataset = ResidDataset(self.meas_generator,
+                                    augmentation=augmentation)
         self.dataset.load_data(count=count)
         self.dataset.prepare()
         if self.training:
             self.model = model_btk.MaskRCNN(mode="training",
                                             config=self.config,
                                             model_dir=self.output_dir)
-            self.dataset.augmentation = True
             self.dataset_val = ResidDataset(self.meas_generator)
             self.dataset_val.load_data(count=count)
             self.dataset_val.prepare()
