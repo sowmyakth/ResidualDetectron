@@ -16,6 +16,7 @@ from mrcnn import utils
 #import mrcnn.model_w_btk as model_btk
 import mrcnn.model_btk_only as model_btk
 
+
 def get_ax(rows=1, cols=1, size=4):
     """Return a Matplotlib Axes array to be used in
     all visualizations in the notebook. Provide a
@@ -486,7 +487,7 @@ class Resid_btk_model(btk.compute_metrics.Metrics_params):
                 NAME = new_model_name
 
         self.config = InferenceConfig()
-        # self.config.display()
+        self.config.display()
 
     def make_resid_model(self, catalog_name, count=256,
                          sampling_function=None, max_number=2,
@@ -502,6 +503,9 @@ class Resid_btk_model(btk.compute_metrics.Metrics_params):
                                     augmentation=augmentation)
         self.dataset.load_data(count=count)
         self.dataset.prepare()
+        if augmentation:
+            self.config.BATCH_SIZE *= 4
+            self.IMAGES_PER_GPU *= 4
         if self.training:
             self.model = model_btk.MaskRCNN(mode="training",
                                             config=self.config,
