@@ -400,38 +400,39 @@ class ResidDataset(utils.Dataset):
         images[:, :, :, 6:12] = (images[:, :, :, 6:12] - self.mean2)/self.std2
         return images
 
-    def augment_bbox(self, bboxes, stamp_size):
-        mult_y = np.array([0, 1, 1])
-        mult_x = np.array([1, 0, 1])
-        h0 = (bboxes[:, :, 2] - bboxes[:, :, 0]) / 2.
-        x0 = np.mean(bboxes[:, :, 1::2], axis=2)
-        y0 = np.mean(bboxes[:, :, ::2], axis=2)
+    def augment_bbox(self, bboxes, end_pixel):
+        mult_y = np.array([0, 0, 1, 1])
+        mult_x = np.array([0, 1, 0, 1])
+        h0 = (bboxes[:, 2] - bboxes[:, 0]) / 2.
+        x0 = np.mean(bboxes[:, 1::2], axis=1)
+        y0 = np.mean(bboxes[:, ::2], axis=1)
+        aug_bbox = np.zeros((4, len(bboxes), 4))
         for i in range(len(mult_x)):
-            new_x0 = np.abs(stamp_size*mult_x[i] - x0)
-            new_y0 = np.abs(stamp_size*mult_y[i] - y0)
+            new_x0 = np.abs(end_pixel*mult_x[i] - x0)
+            new_y0 = np.abs(end_pixel*mult_y[i] - y0)
             new_x0[x0 == 0.5] = 0.5
             new_y0[x0 == 0.5] = 0.5
             new_bbox = np.array(
                 [new_y0 - h0, new_x0 - h0, new_y0 + h0, new_x0 + h0])
-            new_bbox = np.transpose(new_bbox, axes=(1, 2, 0,))
-            bboxes = np.concatenate((bboxes, new_bbox))
-        return bboxes
+            new_bbox = np.transpose(new_bbox, axes=(1, 0,))
+            aug_bbox[i] = new_bbox
+        return aug_bbox
 
     def augment_data(self, images, bboxes, class_ids):
         """Performs data augmentation by performing rotatioon and reflection"""
-        aug_image = np.concatenate([images[:, :, :, :],
-                                    images[:, :, ::-1, :],
-                                    images[:, ::-1, :, :],
-                                    images[:, ::-1, ::-1, :]])
-        aug_bbox = self.augment_bbox(bboxes, images.shape[1])
-        aug_class = np.concatenate([class_ids, class_ids, class_ids, class_ids])
+        aug_image = np.stack([images[:, :, :],
+                              images[:, ::-1, :],
+                              images[::-1, :, :],
+                              images[::-1, ::-1, :]])
+        aug_bbox = self.augment_bbox(bboxes, images.shape[1] - 1)
+        aug_class = np.stack([class_ids, class_ids, class_ids, class_ids])
         return aug_image, aug_bbox, aug_class
 
     def load_input(self):
         """Generates image + bbox for undetected objects if any"""
         output, deb, _ = next(self.meas_generator)
         self.batch_blend_list = output['blend_list']
-        obs_cond = output['obs_condition']
+        self.obs_cond = output['obs_condition']
         input_images, input_bboxes, input_class_ids = [], [], []
         self.det_cent, self.true_cent = [], []
         for i in range(len(output['blend_list'])):
@@ -443,22 +444,24 @@ class ResidDataset(utils.Dataset):
             self.true_cent.append(
                 np.stack([blend_list['dx'], blend_list['dy']]).T)
             resid_images = blend_images - model_images
-            input_images.append(np.dstack([resid_images, model_images]))
+            image = np.dstack([resid_images, model_images])
             x, y, h = get_undetected(blend_list, detected_centers,
-                                     obs_cond[3])
-            bbox = np.array([y, x, y+h, x+h]).T
+                                     self.obs_cond[3])
+            bbox = np.array([y, x, y+h, x+h], dtype=np.int32).T
             bbox = np.concatenate((bbox, [[0, 0, 1, 1]]))
-            print(input_bboxes)
-            input_bboxes.append(bbox)
-            class_ids = np.concatenate((np.ones(len(x)), [0]))
-            input_class_ids.append(class_ids)
+            class_ids = np.concatenate((np.ones(len(x), dtype=np.int32), [0]))
+            if self.augmentation:
+                image, bbox, class_ids = self.augment_data(
+                    image, bbox, class_ids)
+                input_images.extend(image)
+                input_bboxes.extend(bbox)
+                input_class_ids.extend(class_ids)
+            else:
+                input_images.append(image)
+                input_bboxes.append(bbox)
+                input_class_ids.append(class_ids)
         input_images = np.array(input_images, dtype=np.float32)
         input_images = self.normalize_images(input_images)
-        input_bboxes = np.array(input_bboxes, dtype=np.int32)
-        input_class_ids = np.array(input_class_ids, dtype=np.int32)
-        if self.augmentation:
-            input_images, input_bboxes, input_class_ids = self.augment_data(
-                input_images, input_bboxes, input_class_ids)
         return input_images, input_bboxes, input_class_ids
 
     def image_reference(self, image_id):
@@ -514,6 +517,10 @@ class Resid_btk_model(btk.compute_metrics.Metrics_params):
             self.dataset_val = ResidDataset(self.meas_generator)
             self.dataset_val.load_data(count=count)
             self.dataset_val.prepare()
+            if augmentation:
+                self.config.VAL_BATCH_SIZE = self.config.BATCH_SIZE/4
+            else:
+                self.config.VAL_BATCH_SIZE = self.config.BATCH_SIZE
         else:
             self.model = model_btk.MaskRCNN(mode="inference",
                                             config=self.config,
