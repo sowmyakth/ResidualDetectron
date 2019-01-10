@@ -28,7 +28,8 @@ def get_ax(rows=1, cols=1, size=4):
     return ax
 
 
-def resid_merge_centers(det_cent, bbox, distance_upper_bound=1):
+def resid_merge_centers(det_cent, bbox,
+                        distance_upper_bound=1, center_shift=0):
     """Combines centers from detection algorithm and iteratively
     detected centers. Also corrects for shift of 4 pixels in center
     Args:
@@ -37,14 +38,17 @@ def resid_merge_centers(det_cent, bbox, distance_upper_bound=1):
         distance_upper_bound: If network prediction is within this distance of
                               a det_cent, select the network prediction and
                               remove det_cent from final merged predictions.
+        center_shift: Value to offset the bboc cenetrs by. Applicable if
+            padding was applied to the residual image causing detected cenetrs
+            and bounding box centers to offest.
     """
     # remove duplicates
     if len(bbox) == 0:
         return det_cent
     q, = np.where((bbox[:, 0] > 10) & (bbox[:, 1] > 10))
     # centers of bbox as mean of edges
-    iter_det = np.dstack([np.mean(bbox[q, 1::2], axis=1) - 4,
-                         np.mean(bbox[q, ::2], axis=1) - 4])[0]
+    iter_det = np.dstack([np.mean(bbox[q, 1::2], axis=1) - center_shift,
+                         np.mean(bbox[q, ::2], axis=1) - center_shift])[0]
     unique_det_cent = np.unique(det_cent, axis=0)
     z_tree = spatial.KDTree(unique_det_cent)
     iter_det = iter_det.reshape(-1, 2)
@@ -495,15 +499,18 @@ class Resid_btk_model(btk.compute_metrics.Metrics_params):
 
     def make_resid_model(self, catalog_name, count=256,
                          sampling_function=None, max_number=2,
-                         augmentation=False):
-
+                         augmentation=False, norm_val=None,
+                         selection_function=None, wld_catalog=None):
+        """Creates dataset and loads model"""
         # If no user input sampling function then set default function
         if not sampling_function:
             sampling_function = resid_general_sampling_function
         self.meas_generator = self.make_meas_generator(catalog_name,
                                                        max_number,
-                                                       sampling_function)
-        self.dataset = ResidDataset(self.meas_generator,
+                                                       sampling_function,
+                                                       selection_function,
+                                                       wld_catalog)
+        self.dataset = ResidDataset(self.meas_generator, norm_val=norm_val,
                                     augmentation=augmentation)
         self.dataset.load_data(count=count)
         self.dataset.prepare()
@@ -514,11 +521,12 @@ class Resid_btk_model(btk.compute_metrics.Metrics_params):
             self.model = model_btk.MaskRCNN(mode="training",
                                             config=self.config,
                                             model_dir=self.output_dir)
-            self.dataset_val = ResidDataset(self.meas_generator)
+            self.dataset_val = ResidDataset(self.meas_generator,
+                                            norm_val=norm_val)
             self.dataset_val.load_data(count=count)
             self.dataset_val.prepare()
             if augmentation:
-                self.config.VAL_BATCH_SIZE = self.config.BATCH_SIZE/4
+                self.config.VAL_BATCH_SIZE = int(self.config.BATCH_SIZE/4)
             else:
                 self.config.VAL_BATCH_SIZE = self.config.BATCH_SIZE
         else:
@@ -581,5 +589,6 @@ class Resid_btk_model(btk.compute_metrics.Metrics_params):
         in_detected_center = self.dataset.det_cent
         results1 = self.model.detect([image], verbose=0)
         r1 = results1[0]
-        detected_centers = resid_merge_centers(in_detected_center, r1['rois'])
+        detected_centers = resid_merge_centers(in_detected_center, r1['rois'],
+                                               center_shift=0)
         return detected_centers, true_centers
