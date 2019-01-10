@@ -45,7 +45,7 @@ def resid_merge_centers(det_cent, bbox,
     # remove duplicates
     if len(bbox) == 0:
         return det_cent
-    q, = np.where((bbox[:, 0] > 10) & (bbox[:, 1] > 10))
+    q, = np.where((bbox[:, 0] > 3+center_shift) & (bbox[:, 1] > 3+center_shift))
     # centers of bbox as mean of edges
     iter_det = np.dstack([np.mean(bbox[q, 1::2], axis=1) - center_shift,
                          np.mean(bbox[q, ::2], axis=1) - center_shift])[0]
@@ -521,7 +521,12 @@ class Resid_btk_model(btk.compute_metrics.Metrics_params):
             self.model = model_btk.MaskRCNN(mode="training",
                                             config=self.config,
                                             model_dir=self.output_dir)
-            self.dataset_val = ResidDataset(self.meas_generator,
+            val_meas_generator = self.make_meas_generator(catalog_name,
+                                                          max_number,
+                                                          sampling_function,
+                                                          selection_function,
+                                                          wld_catalog)
+            self.dataset_val = ResidDataset(val_meas_generator,
                                             norm_val=norm_val)
             self.dataset_val.load_data(count=count)
             self.dataset_val.prepare()
