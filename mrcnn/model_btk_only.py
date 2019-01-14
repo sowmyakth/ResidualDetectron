@@ -989,7 +989,7 @@ def mrcnn_class_loss_graph(target_class_ids, pred_class_logits):
         labels=target_class_ids, logits=pred_class_logits)
     # Computer loss mean. Use only predictions that contribute
     # to the loss to get a correct mean.
-    loss = tf.reduce_sum(loss)
+    loss = tf.reduce_mean(loss)  # tf.reduce_sum(loss)
     return loss
 
 
@@ -1959,7 +1959,7 @@ class MaskRCNN():
                                          batch_size=self.config.BATCH_SIZE,
                                          no_augmentation_sources=no_augmentation_sources)
         val_generator = data_generator(val_dataset, self.config, shuffle=True,
-                                       batch_size=self.config.VAL_BATCH_SIZE)
+                                       batch_size=self.config.BATCH_SIZE)
 
         # Callbacks
         callbacks = [
@@ -2004,8 +2004,7 @@ class MaskRCNN():
         print("Keras model fit", self.epoch)
         return history
 
-    def unmold_detections(self, detections, original_image_shape,
-                          image_shape):
+    def unmold_detections(self, detections, image_shape):
         """Reformats the detections of one image from the format of the neural
         network output to a format suitable for use in the rest of the
         application.
@@ -2026,7 +2025,7 @@ class MaskRCNN():
         N = zero_ix[0] if zero_ix.shape[0] > 0 else detections.shape[0]
 
         # Extract boxes, class_ids, scores
-        boxes = detections[:N, :4].astype(np.int32)
+        boxes = detections[:N, :4]*image_shape[0]
         class_ids = detections[:N, 4].astype(np.int32)
         scores = detections[:N, 5]
         # Filter out detections with zero area. Happens in early training when
@@ -2037,6 +2036,7 @@ class MaskRCNN():
             boxes = np.delete(boxes, exclude_ix, axis=0)
             class_ids = np.delete(class_ids, exclude_ix, axis=0)
             scores = np.delete(scores, exclude_ix, axis=0)
+        boxes = boxes.astype(np.int32)
         return boxes, class_ids, scores
 
     def detect(self, images, verbose=0):
@@ -2084,7 +2084,7 @@ class MaskRCNN():
         for i, image in enumerate(images):
             final_rois, final_class_ids, final_scores =\
                 self.unmold_detections(detections[i],
-                                       image.shape, images[i].shape)
+                                       image.shape)
             results.append({
                 "rois": final_rois,
                 "class_ids": final_class_ids,
