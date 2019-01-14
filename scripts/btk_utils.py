@@ -491,6 +491,8 @@ class Resid_btk_model(btk.compute_metrics.Metrics_params):
         class InferenceConfig(train.InputConfig):
             GPU_COUNT = 1
             IMAGES_PER_GPU = images_per_gpu
+            STEPS_PER_EPOCH = 500  # 200
+            VALIDATION_STEPS = 20
             if new_model_name:
                 NAME = new_model_name
 
@@ -530,10 +532,6 @@ class Resid_btk_model(btk.compute_metrics.Metrics_params):
                                             norm_val=norm_val)
             self.dataset_val.load_data(count=count)
             self.dataset_val.prepare()
-            if augmentation:
-                self.config.VAL_BATCH_SIZE = int(self.config.BATCH_SIZE/4)
-            else:
-                self.config.VAL_BATCH_SIZE = self.config.BATCH_SIZE
         else:
             self.model = model_btk.MaskRCNN(mode="inference",
                                             config=self.config,
@@ -546,7 +544,6 @@ class Resid_btk_model(btk.compute_metrics.Metrics_params):
                             wld_catalog=None):
         """
         Creates the default btk.meas_generator for input catalog
-        Overwrite this function for user defined measurement generator.
         Args:
             catalog_name: CatSim like catalog to draw galaxies from.
             max_number: Maximum number of galaxies per blend.
