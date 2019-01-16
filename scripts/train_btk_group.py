@@ -35,13 +35,14 @@ def main(Args):
     resid_model = btk_utils.Resid_btk_model(
         Args.model_name, Args.model_path, MODEL_DIR, training=True,
         new_model_name=new_model_name, images_per_gpu=4)
-    # Load parametrs for dataset and load model
-    resid_model.make_resid_model(catalog_name, count=count,
-                                 max_number=6, augmentation=True,
-                                 sampling_functon=btk_utils.group_sampling_function,
-                                 selection_function=btk_utils.basic_selection_function,
-                                 wld_catalog=get_wld_catalog(),
-                                 norm_val=norm)
+    # Load parameters for dataset and load model
+    resid_model.make_resid_model(
+        catalog_name, count=count,
+        max_number=6, augmentation=True,
+        sampling_functon=btk_utils.group_sampling_function,
+        selection_function=btk_utils.basic_selection_function,
+        wld_catalog=get_wld_catalog(),
+        norm_val=norm)
     learning_rate = resid_model.config.LEARNING_RATE*5
     history1 = resid_model.model.train(resid_model.dataset,
                                        resid_model.dataset_val,
