@@ -255,6 +255,13 @@ class Scarlet_resid_params(btk.measure.Measurement_params):
     detect_centers = True
 
     def get_centers(self, image):
+        """Runs SEP on coadd of input image and returns detected centroids
+        Args:
+            image: Input image (multi-band) to perform detection on
+                   [bands, x, y].
+        Returns:
+            x and y coordinates of detected centroids.
+        """
         detect = image.mean(axis=0)  # simple average for detection
         bkg = sep.Background(detect)
         catalog = sep.extract(detect, 1.5, err=bkg.globalrms)
@@ -423,7 +430,7 @@ class ResidDataset(utils.Dataset):
         return aug_bbox
 
     def augment_data(self, images, bboxes, class_ids):
-        """Performs data augmentation by performing rotatioon and reflection"""
+        """Performs data augmentation by performing rotation and reflection"""
         aug_image = np.stack([images[:, :, :],
                               images[:, ::-1, :],
                               images[::-1, :, :],
@@ -578,7 +585,7 @@ class Resid_btk_model(btk.compute_metrics.Metrics_params):
 
     def get_detections(self, index):
         """
-        Returns model detectected centers and true center for data entry index.
+        Returns model detected centers and true center for data entry index.
         Args:
             index: Index of dataset to perform detection on.
         Returns:
