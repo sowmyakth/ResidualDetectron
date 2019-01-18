@@ -100,8 +100,8 @@ def get_btk_generator(meas_params, max_number, sampling_function,
     return meas_generator
 
 
-def run_sep(test_size, max_number, sampling_function,
-            selection_function=None, wld_catalog=None):
+def run_sep(save_file_name, test_size, meas_params, max_number,
+            sampling_function, selection_function=None, wld_catalog=None):
     """Test performance for btk input blends"""
     meas_generator = get_btk_generator(
         max_number, sampling_function, selection_function, wld_catalog)
@@ -118,9 +118,17 @@ def run_sep(test_size, max_number, sampling_function,
         results.append([len(true_centers), det, undet, spur])
     arr_results = np.array(results).T
     print("Results: ", np.sum(arr_results, axis=1))
-    save_file_name = f"detection_results_sep.txt"
     np.savetxt(save_file_name, arr_results)
 
 
 if __name__ == '__main__':
-    run_sep()
+    max_number = 2
+    test_size = 15
+    # Run sep coadd detection
+    meas_params = Sep_params
+    save_file_name = f"sep_2gal_coadd_results.txt"
+    run_sep(save_file_name, test_size, meas_params, max_number)
+    # Run sep i band detection
+    meas_params = Sep_params_i_band
+    save_file_name = f"sep_2gal_iband_results.txt"
+    run_sep(save_file_name, test_size, meas_params, max_number)
