@@ -38,9 +38,9 @@ def resid_merge_centers(det_cent, bbox,
         distance_upper_bound: If network prediction is within this distance of
                               a det_cent, select the network prediction and
                               remove det_cent from final merged predictions.
-        center_shift: Value to offset the bboc cenetrs by. Applicable if
-            padding was applied to the residual image causing detected cenetrs
-            and bounding box centers to offest.
+        center_shift: Value to offset the bbox centers by. Applicable if
+            padding was applied to the residual image causing detected centers
+            and bounding box centers to offset.
     """
     # remove duplicates
     if len(bbox) == 0:
@@ -103,7 +103,7 @@ def get_random_shift(Args, number_of_objects, maxshift=None):
     between 0 and max-shift (in arcseconds).
     """
     if not maxshift:
-        maxshift = Args.stamp_size / 30.  # in arcseconds
+        maxshift = Args.stamp_size / 10.  # in arcseconds
     dx = np.random.uniform(-maxshift, maxshift,
                            size=number_of_objects)
     dy = np.random.uniform(-maxshift, maxshift,
@@ -159,9 +159,14 @@ def resid_general_sampling_function(Args, catalog):
                             catalog[np.random.choice(q,
                                                      size=number_of_objects)]])
     blend_catalog['ra'], blend_catalog['dec'] = 0., 0.
-    dx, dy = get_random_shift(Args, number_of_objects + 1)
+    # keep number density of objects constant
+    maxshift = Args.stamp_size/30.*number_of_objects**0.5
+    dx, dy = get_random_shift(Args, number_of_objects + 1,
+                              maxshift=maxshift)
     blend_catalog['ra'] += dx
     blend_catalog['dec'] += dy
+    # Shift center of all objects so that the blend isn't exactly in the center
+    dx, dy = get_random_shift(Args, 1, maxshift=5*Args.pixel_scale)
     return blend_catalog
 
 
