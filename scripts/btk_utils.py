@@ -47,19 +47,21 @@ def resid_merge_centers(det_cent, bbox,
         return det_cent
     q, = np.where((bbox[:, 0] > 3+center_shift) & (bbox[:, 1] > 3+center_shift))
     # centers of bbox as mean of edges
-    iter_det = np.dstack([np.mean(bbox[q, 1::2], axis=1) - center_shift,
-                         np.mean(bbox[q, ::2], axis=1) - center_shift])[0]
+    resid_det = np.dstack([np.mean(bbox[q, 1::2], axis=1) - center_shift,
+                           np.mean(bbox[q, ::2], axis=1) - center_shift])[0]
     unique_det_cent = np.unique(det_cent, axis=0)
+    if len(unique_det_cent) == 0:
+        return resid_det
     z_tree = spatial.KDTree(unique_det_cent)
-    iter_det = iter_det.reshape(-1, 2)
-    match = z_tree.query(iter_det,
+    resid_det = resid_det.reshape(-1, 2)
+    match = z_tree.query(resid_det,
                          distance_upper_bound=distance_upper_bound)
     trim = np.setdiff1d(range(len(unique_det_cent)), match[1])
     trim_det_cent = [unique_det_cent[i] for i in trim]
     if len(trim_det_cent) == 0:
-        return iter_det
-    detected = np.vstack([trim_det_cent, iter_det])
-    return detected
+        return resid_det
+    iter_det = np.vstack([trim_det_cent, resid_det])
+    return iter_det
 
 
 def get_undetected(true_cat, meas_cent, obs_cond, distance_upper_bound=10):
@@ -83,13 +85,17 @@ def get_undetected(true_cat, meas_cent, obs_cond, distance_upper_bound=10):
         Bounding box of undetected galaxies
 
     """
-    psf_sigma = obs_cond.psf_sigma_m
+    psf_sigma = obs_cond.zenith_psf_fwhm*obs_cond.airmass**0.6
     pixel_scale = obs_cond.pixel_scale
     peaks = np.stack([true_cat['dx'], true_cat['dy']]).T
-    z_tree = spatial.KDTree(peaks)
-    meas_cent = np.array(meas_cent).reshape(-1, 2)
-    match = z_tree.query(meas_cent, distance_upper_bound=distance_upper_bound)
-    undetected = np.setdiff1d(range(len(true_cat)), match[1])
+    if len(peaks) == 0:
+        undetected = range(len(true_cat))
+    else:
+        z_tree = spatial.KDTree(peaks)
+        meas_cent = np.array(meas_cent).reshape(-1, 2)
+        match = z_tree.query(meas_cent,
+                             distance_upper_bound=distance_upper_bound)
+        undetected = np.setdiff1d(range(len(true_cat)), match[1])
     numer = true_cat['a_d']*true_cat['b_d']*true_cat['fluxnorm_disk'] + true_cat['a_b']*true_cat['b_b']*true_cat['fluxnorm_bulge']
     hlr = numer / (true_cat['fluxnorm_disk'] + true_cat['fluxnorm_bulge'])
     h = np.hypot(hlr, 1.18*psf_sigma)*2 / pixel_scale
@@ -233,7 +239,7 @@ def group_sampling_function(Args, catalog, min_group_size=5):
 def basic_selection_function(catalog):
     """Apply selection cuts to the input catalog"""
     a = np.hypot(catalog['a_d'], catalog['a_b'])
-    q, = np.where((a <= 2) & (catalog['i_ab'] <= 28))
+    q, = np.where((a <= 2) & (catalog['i_ab'] <= 26))
     return catalog[q]
 
 
@@ -270,7 +276,8 @@ class Scarlet_resid_params(btk.measure.Measurement_params):
         detect = image.mean(axis=0)  # simple average for detection
         bkg = sep.Background(detect)
         catalog = sep.extract(detect, 1.5, err=bkg.globalrms)
-        return np.stack((catalog['x'], catalog['y']), axis=1)
+        q, = np.where((catalog['x'] > 0) & (catalog['y'] > 0))
+        return np.stack((catalog['x'][q], catalog['y'][q]), axis=1)
 
     def initialize(self, images, peaks,
                    bg_rms, iters, e_rel):
@@ -355,12 +362,18 @@ class Scarlet_resid_params(btk.measure.Measurement_params):
             peaks = self.get_centers(images)
         else:
             peaks = np.stack((blend_cat['dx'], blend_cat['dy']), axis=1)
-        bg_rms = [data['obs_condition'][i].mean_sky_level**0.5 for i in range(len(images))]
+        if len(peaks) == 0:
+            return [data['blend_images'][index], peaks]
+        bg_rms = [data['obs_condition'][index][i].mean_sky_level**0.5 for i in range(len(images))]
         blend = self.scarlet_fit(images, peaks,
                                  np.array(bg_rms), self.iters,
                                  self.e_rel)
         selected_peaks = [[src.center[1], src.center[0]]for src in blend.components]
-        model = np.transpose(blend.get_model(), axes=(1, 2, 0))
+        try:
+            model = np.transpose(blend.get_model(), axes=(1, 2, 0))
+        except(ValueError):
+            print("unable to create scarlet model")
+            return [data['blend_images'][index], []]
         return [model, selected_peaks]
 
 
@@ -462,7 +475,7 @@ class ResidDataset(utils.Dataset):
             resid_images = blend_images - model_images
             image = np.dstack([resid_images, model_images])
             x, y, h = get_undetected(blend_list, detected_centers,
-                                     self.obs_cond[3])
+                                     self.obs_cond[i][3])
             bbox = np.array([y, x, y+h, x+h], dtype=np.int32).T
             bbox = np.concatenate((bbox, [[0, 0, 1, 1]]))
             class_ids = np.concatenate((np.ones(len(x), dtype=np.int32), [0]))
@@ -567,7 +580,7 @@ class Resid_btk_model(btk.compute_metrics.Metrics_params):
         # Load parameters
         param = btk.config.Simulation_params(
             catalog_name, max_number=max_number, stamp_size=25.6,
-            batch_size=self.config.BATCH_SIZE, seed=199)
+            batch_size=self.config.BATCH_SIZE, draw_isolated=False, seed=199)
         if wld_catalog:
             param.wld_catalog = wld_catalog
         np.random.seed(param.seed)
@@ -594,15 +607,15 @@ class Resid_btk_model(btk.compute_metrics.Metrics_params):
         Args:
             index: Index of dataset to perform detection on.
         Returns:
-            x and y coordinates of detected and true centers.
+            x and y coordinates of iteratively detected cenetrs, cenetrs
+            detected initially and true centers.
         Useful for evaluating model detection performance."""
-        image, image_meta, gt_class_id, gt_bbox =\
-            model_btk.load_image_gt(self.dataset, self.config,
-                                    (index), use_mini_mask=False)
+        image, gt_bbox, gt_class_id = self.dataset.load_input()
         true_centers = self.dataset.true_cent
-        in_detected_center = self.dataset.det_cent
-        results1 = self.model.detect([image], verbose=0)
-        r1 = results1[0]
-        detected_centers = resid_merge_centers(in_detected_center, r1['rois'],
-                                               center_shift=0)
-        return detected_centers, true_centers
+        detected_centers = self.dataset.det_cent
+        results1 = self.model.detect(image, verbose=0)
+        iter_detected_centers = []
+        for i, r1 in enumerate(results1):
+            iter_detected_centers.append(resid_merge_centers(
+                detected_centers[i], r1['rois'], center_shift=0))
+        return iter_detected_centers, detected_centers, true_centers
