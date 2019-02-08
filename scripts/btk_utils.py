@@ -260,6 +260,83 @@ def resid_obs_conditions(Args, band):
     return survey
 
 
+def scarlet_initialize(images, peaks,
+                       bg_rms, iters, e_rel):
+    """ Deblend input images with scarlet
+    Args:
+        images: Numpy array of multi-band image to run scarlet on
+               [Number of bands, height, width].
+        peaks: Array of x and y coordinates of centroids of objects in
+               the image [number of sources, 2].
+        bg_rms: Background RMS value of the images [Number of bands]
+        iters: Maximum number of iterations if scarlet doesn't converge
+               (Default: 200).
+    e_rel: Relative error for convergence (Default: 0.015)
+    Returns
+        blend: scarlet.Blend object for the initialized sources
+        rejected_sources: list of sources (if any) that scarlet was
+        unable to initialize the image with.
+    """
+    sources = []
+    for n, peak in enumerate(peaks):
+        try:
+            result = scarlet.ExtendedSource(
+                (peak[1], peak[0]),
+                images,
+                bg_rms)
+            sources.append(result)
+        except scarlet.source.SourceInitError:
+            print("No flux in peak {0} at {1}".format(n, peak))
+    blend = scarlet.Blend(sources).set_data(images, bg_rms=bg_rms)
+    return blend
+
+
+def scarlet_multi_initialize(images, peaks,
+                             bg_rms, iters, e_rel):
+    """ Initializes scarlet MultiComponentSource at locations input as
+    peaks in the (multi-band) input images.
+    Args:
+        images: Numpy array of multi-band image to run scarlet on
+                [Number of bands, height, width].
+        peaks: Array of x and y coordinates of centroids of objects in
+               the image [number of sources, 2].
+        bg_rms: Background RMS value of the images [Number of bands]
+    Returns
+        blend: scarlet.Blend object for the initialized sources
+        rejected_sources: list of sources (if any) that scarlet was
+                          unable to initialize the image with.
+    """
+    sources = []
+    for n, peak in enumerate(peaks):
+        try:
+            result = scarlet.MultiComponentSource(
+                (peak[1], peak[0]),
+                images,
+                bg_rms)
+            sources.append(result)
+        except scarlet.source.SourceInitError:
+            print("No flux in peak {0} at {1}".format(n, peak))
+    blend = scarlet.Blend(sources).set_data(images, bg_rms=bg_rms)
+    return blend
+
+
+def scarlet_fit(images, peaks,
+                bg_rms, iters, e_rel):
+    """Fits a scarlet model for the input image and centers"""
+    try:
+        blend = scarlet_multi_initialize(images, peaks,
+                                      bg_rms, iters, e_rel)
+        blend.fit(iters, e_rel=e_rel)
+    except (np.linalg.LinAlgError, ValueError):
+        blend = scarlet_initialize(images, peaks,
+                                bg_rms, iters, e_rel)
+        try:
+            blend.fit(iters, e_rel=e_rel)
+        except(np.linalg.LinAlgError, ValueError):
+            print("scarlet did not fit")
+    return blend
+
+
 class Scarlet_resid_params(btk.measure.Measurement_params):
     iters = 400
     e_rel = .015
@@ -279,81 +356,6 @@ class Scarlet_resid_params(btk.measure.Measurement_params):
         q, = np.where((catalog['x'] > 0) & (catalog['y'] > 0))
         return np.stack((catalog['x'][q], catalog['y'][q]), axis=1)
 
-    def initialize(self, images, peaks,
-                   bg_rms, iters, e_rel):
-        """
-        Deblend input images with scarlet
-        Args:
-            images: Numpy array of multi-band image to run scarlet on
-                   [Number of bands, height, width].
-            peaks: Array of x and y coordinates of centroids of objects in
-                   the image [number of sources, 2].
-            bg_rms: Background RMS value of the images [Number of bands]
-            iters: Maximum number of iterations if scarlet doesn't converge
-                   (Default: 200).
-        e_rel: Relative error for convergence (Default: 0.015)
-        Returns
-            blend: scarlet.Blend object for the initialized sources
-            rejected_sources: list of sources (if any) that scarlet was
-            unable to initialize the image with.
-        """
-        sources = []
-        for n, peak in enumerate(peaks):
-            try:
-                result = scarlet.ExtendedSource(
-                    (peak[1], peak[0]),
-                    images,
-                    bg_rms)
-                sources.append(result)
-            except scarlet.source.SourceInitError:
-                print("No flux in peak {0} at {1}".format(n, peak))
-        blend = scarlet.Blend(sources).set_data(images, bg_rms=bg_rms)
-        return blend
-
-    def multi_initialize(self, images, peaks,
-                         bg_rms, iters, e_rel):
-        """ Initializes scarlet MultiComponentSource at locations input as
-        peaks in the (multi-band) input images.
-        Args:
-            images: Numpy array of multi-band image to run scarlet on
-                    [Number of bands, height, width].
-            peaks: Array of x and y coordinates of centroids of objects in
-                   the image [number of sources, 2].
-            bg_rms: Background RMS value of the images [Number of bands]
-        Returns
-            blend: scarlet.Blend object for the initialized sources
-            rejected_sources: list of sources (if any) that scarlet was
-                              unable to initialize the image with.
-        """
-        sources = []
-        for n, peak in enumerate(peaks):
-            try:
-                result = scarlet.MultiComponentSource(
-                    (peak[1], peak[0]),
-                    images,
-                    bg_rms)
-                sources.append(result)
-            except scarlet.source.SourceInitError:
-                print("No flux in peak {0} at {1}".format(n, peak))
-        blend = scarlet.Blend(sources).set_data(images, bg_rms=bg_rms)
-        return blend
-
-    def scarlet_fit(self, images, peaks,
-                    bg_rms, iters, e_rel):
-        """Fits a scarlet model for the input image and centers"""
-        try:
-            blend = self.multi_initialize(images, peaks,
-                                          bg_rms, iters, e_rel)
-            blend.fit(iters, e_rel=e_rel)
-        except (np.linalg.LinAlgError, ValueError):
-            blend = self.initialize(images, peaks,
-                                    bg_rms, iters, e_rel)
-            try:
-                blend.fit(iters, e_rel=e_rel)
-            except(np.linalg.LinAlgError, ValueError):
-                print("scarlet did not fit")
-        return blend
-
     def get_deblended_images(self, data, index):
         """Returns scarlet modeled blend  and centers for the given blend"""
         images = np.transpose(data['blend_images'][index], axes=(2, 0, 1))
@@ -365,9 +367,8 @@ class Scarlet_resid_params(btk.measure.Measurement_params):
         if len(peaks) == 0:
             return [data['blend_images'][index], peaks]
         bg_rms = [data['obs_condition'][index][i].mean_sky_level**0.5 for i in range(len(images))]
-        blend = self.scarlet_fit(images, peaks,
-                                 np.array(bg_rms), self.iters,
-                                 self.e_rel)
+        blend = scarlet_fit(images, peaks, np.array(bg_rms),
+                            self.iters, self.e_rel)
         selected_peaks = [[src.center[1], src.center[0]]for src in blend.components]
         try:
             model = np.transpose(blend.get_model(), axes=(1, 2, 0))
@@ -375,6 +376,84 @@ class Scarlet_resid_params(btk.measure.Measurement_params):
             print("unable to create scarlet model")
             return [data['blend_images'][index], []]
         return [model, selected_peaks]
+
+
+class Stack_iter_params(btk.measure.Measurement_params):
+    min_pix = 1
+    bkg_bin_size = 32
+    thr_value = 5
+    psf_stamp_size = 41
+    iters = 200
+    e_rel = .015
+    
+    def __init__(self,*args, **kwargs):
+        super(Stack_iter_params, self).__init__(*args, **kwargs)
+        self.catalog={}
+
+    def get_psf_sky(self, obs_cond):
+        mean_sky_level = obs_cond.mean_sky_level
+        psf = obs_cond.psf_model
+        psf_image = psf.drawImage(
+           nx=self.psf_stamp_size,
+           ny=self.psf_stamp_size).array
+        return psf_image, mean_sky_level
+
+    def get_catalog(self, data, index):
+        """Perform detection, deblending and measurement on the i band image of
+        the blend image for input index in the batch.
+         """
+        image_array = data['blend_images'][index, :, :, 3].astype(np.float32)
+        psf_image, mean_sky_level = self.get_psf_sky(data['obs_condition'][index][3])
+        variance_array = image_array + mean_sky_level
+        psf_array = psf_image.astype(np.float64)
+        cat = btk.utils.run_stack(
+            image_array, variance_array, psf_array, min_pix=self.min_pix,
+            bkg_bin_size=self.bkg_bin_size, thr_value=self.thr_value)
+        cat_chldrn = cat[
+            (cat['deblend_nChild'] == 0) & (cat['base_SdssCentroid_flag'] == False)]
+        cat_chldrn = cat_chldrn.copy(deep=True)
+        return cat_chldrn.asAstropy()
+
+    def get_centers(self, catalog):
+        """Runs SEP on coadd of input image and returns detected centroids
+        Args:
+            image: Input image (multi-band) to perform detection on
+                   [bands, x, y].
+        Returns:
+            x and y coordinates of detected centroids.
+        """
+        xs = catalog['base_SdssCentroid_y']
+        ys = catalog['base_SdssCentroid_x']
+        q, = np.where((xs > 0) & (ys > 0))
+        return np.stack((ys[q],xs[q]),axis=1)
+
+    def get_deblended_images(self, data, index):
+        """Returns scarlet modeled blend  and centers for the given blend"""
+        images = np.transpose(data['blend_images'][index], axes=(2, 0, 1))
+        blend_cat = data['blend_list'][index]
+        catalog = self.get_catalog(data, index)
+        self.catalog[index] = catalog
+        peaks = self.get_centers(catalog)
+        if len(peaks) == 0:
+            return [data['blend_images'][index], peaks]
+        bg_rms = [data['obs_condition'][index][i].mean_sky_level**0.5 for i in range(len(images))]      
+        try:
+            blend = self.scarlet_fit(images, peaks,
+                                     np.array(bg_rms), self.iters,
+                                     self.e_rel)
+            selected_peaks = [[src.center[1], src.center[0]]for src in blend.components]
+            model = np.transpose(blend.get_model(), axes=(1, 2, 0))
+        except(ValueError, IndexError) as e:
+            print("unable to create scarlet model")
+            return [data['blend_images'][index], []]
+        return [model, selected_peaks]
+    
+    def make_measurement(self, data, index):
+        """ Returns catlog from the deblending step which involved performing
+        detection, deblending and measurement on the i band image of
+        the blend image for input index in the batch using the DM stack.
+         """
+        return self.catalog[index]
 
 
 class ResidDataset(utils.Dataset):
