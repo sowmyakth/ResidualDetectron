@@ -373,8 +373,9 @@ class Scarlet_resid_params(btk.measure.Measurement_params):
         try:
             model = np.transpose(blend.get_model(), axes=(1, 2, 0))
         except(ValueError):
-            print("unable to create scarlet model")
-            return [data['blend_images'][index], []]
+            print("Unable to create scarlet model")
+            temp_model = np.zeros_like(data['blend_images'][index])
+            return [temp_model, []]
         return [model, selected_peaks]
 
 
@@ -397,10 +398,10 @@ def get_stack_catalog(image, obs_cond,
      """
     image_array = image.astype(np.float32)
     psf_image, mean_sky_level = get_psf_sky(obs_cond, psf_stamp_size)
-    variance_array = image_array + mean_sky_level
+    variance_array = image + mean_sky_level
     psf_array = psf_image.astype(np.float64)
     cat = btk.utils.run_stack(
-        image_array, variance_array, psf_array, min_pix=min_pix,
+        image_array, variance_array.astype(np.float32), psf_array, min_pix=min_pix,
         bkg_bin_size=bkg_bin_size, thr_value=thr_value)
     cat_chldrn = cat[
         (cat['deblend_nChild'] == 0) & (cat['base_SdssCentroid_flag'] == False)]
@@ -456,8 +457,9 @@ class Stack_iter_params(btk.measure.Measurement_params):
             selected_peaks = [[src.center[1], src.center[0]]for src in blend.components]
             model = np.transpose(blend.get_model(), axes=(1, 2, 0))
         except(ValueError, IndexError) as e:
-            print("unable to create scarlet model")
-            return [data['blend_images'][index], []]
+            print("Unable to create scarlet model")
+            temp_model = np.zeros_like(data['blend_images'][index])
+            return [temp_model, []]
         return [model, selected_peaks]
     
     def make_measurement(self, data, index):
