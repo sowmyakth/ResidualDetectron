@@ -448,7 +448,9 @@ class Stack_iter_params(btk.measure.Measurement_params):
         self.catalog[index] = catalog
         peaks = get_stack_centers(catalog)
         if len(peaks) == 0:
-            return [data['blend_images'][index], peaks]
+            print("Unable to create scarlet model, no peaks")
+            temp_model = np.zeros_like(data['blend_images'][index])
+            return [temp_model, peaks]
         bg_rms = [data['obs_condition'][index][i].mean_sky_level**0.5 for i in range(len(images))]      
         try:
             blend = scarlet_fit(images, peaks,
