@@ -415,7 +415,7 @@ class Stack_iter_params(btk.measure.Measurement_params):
         return cat_chldrn.asAstropy()
 
     def get_centers(self, catalog):
-        """Runs SEP on coadd of input image and returns detected centroids
+        """Returns stack detected centroids
         Args:
             image: Input image (multi-band) to perform detection on
                    [bands, x, y].
@@ -438,9 +438,9 @@ class Stack_iter_params(btk.measure.Measurement_params):
             return [data['blend_images'][index], peaks]
         bg_rms = [data['obs_condition'][index][i].mean_sky_level**0.5 for i in range(len(images))]      
         try:
-            blend = self.scarlet_fit(images, peaks,
-                                     np.array(bg_rms), self.iters,
-                                     self.e_rel)
+            blend = scarlet_fit(images, peaks,
+                                np.array(bg_rms), self.iters,
+                                self.e_rel)
             selected_peaks = [[src.center[1], src.center[0]]for src in blend.components]
             model = np.transpose(blend.get_model(), axes=(1, 2, 0))
         except(ValueError, IndexError) as e:
@@ -454,6 +454,45 @@ class Stack_iter_params(btk.measure.Measurement_params):
         the blend image for input index in the batch using the DM stack.
          """
         return self.catalog[index]
+
+
+def make_meas_generator(catalog_name, batch_size, max_number,
+                        sampling_function, selection_function=None,
+                        wld_catalog=None, meas_params=None):
+        """
+        Creates the default btk.meas_generator for input catalog
+        Args:
+            catalog_name: CatSim like catalog to draw galaxies from.
+            max_number: Maximum number of galaxies per blend.
+            sampling_function: Function describing how galaxies are drawn from
+                               catalog_name.
+            wld_catalog: A WLD pre-run astropy table. Used if sampling function
+                         requires grouped objects.
+        """
+        # Load parameters
+        param = btk.config.Simulation_params(
+            catalog_name, max_number=max_number, stamp_size=25.6,
+            batch_size=batch_size, draw_isolated=False, seed=199)
+        if wld_catalog:
+            param.wld_catalog = wld_catalog
+        np.random.seed(param.seed)
+        # Load input catalog
+        catalog = btk.get_input_catalog.load_catalog(
+            param, selection_function=selection_function)
+        # Generate catalogs of blended objects
+        blend_generator = btk.create_blend_generator.generate(
+            param, catalog, sampling_function)
+        # Generates observing conditions
+        observing_generator = btk.create_observing_generator.generate(
+            param, resid_obs_conditions)
+        # Generate images of blends in all the observing bands
+        draw_blend_generator = btk.draw_blends.generate(
+            param, blend_generator, observing_generator)
+        if meas_params is None:
+            meas_params = Scarlet_resid_params()
+        meas_generator = btk.measure.generate(
+            meas_params, draw_blend_generator, param)
+        return meas_generator
 
 
 class ResidDataset(utils.Dataset):
@@ -611,11 +650,13 @@ class Resid_btk_model(btk.compute_metrics.Metrics_params):
         # If no user input sampling function then set default function
         if not sampling_function:
             sampling_function = resid_general_sampling_function
-        self.meas_generator = self.make_meas_generator(catalog_name,
-                                                       max_number,
-                                                       sampling_function,
-                                                       selection_function,
-                                                       wld_catalog)
+        self.meas_generator = make_meas_generator(catalog_name,
+                                                  self.config.BATCH_SIZE,
+                                                  max_number,
+                                                  sampling_function,
+                                                  selection_function,
+                                                  wld_catalog,
+                                                  meas_params)
         self.dataset = ResidDataset(self.meas_generator, norm_val=norm_val,
                                     augmentation=augmentation)
         self.dataset.load_data(count=count)
@@ -627,11 +668,13 @@ class Resid_btk_model(btk.compute_metrics.Metrics_params):
             self.model = model_btk.MaskRCNN(mode="training",
                                             config=self.config,
                                             model_dir=self.output_dir)
-            val_meas_generator = self.make_meas_generator(catalog_name,
-                                                          max_number,
-                                                          sampling_function,
-                                                          selection_function,
-                                                          wld_catalog)
+            val_meas_generator = make_meas_generator(catalog_name,
+                                                     self.config.BATCH_SIZE,
+                                                     max_number,
+                                                     sampling_function,
+                                                     selection_function,
+                                                     wld_catalog,
+                                                     meas_params)
             self.dataset_val = ResidDataset(val_meas_generator,
                                             norm_val=norm_val)
             self.dataset_val.load_data(count=count)
@@ -642,43 +685,6 @@ class Resid_btk_model(btk.compute_metrics.Metrics_params):
                                             model_dir=self.output_dir)
         print("Loading weights from ", self.model_path)
         self.model.load_weights(self.model_path, by_name=True)
-
-    def make_meas_generator(self, catalog_name, max_number,
-                            sampling_function, selection_function=None,
-                            wld_catalog=None):
-        """
-        Creates the default btk.meas_generator for input catalog
-        Args:
-            catalog_name: CatSim like catalog to draw galaxies from.
-            max_number: Maximum number of galaxies per blend.
-            sampling_function: Function describing how galaxies are drawn from
-                               catalog_name.
-            wld_catalog: A WLD pre-run astropy table. Used if sampling function
-                         requires grouped objects.
-        """
-        # Load parameters
-        param = btk.config.Simulation_params(
-            catalog_name, max_number=max_number, stamp_size=25.6,
-            batch_size=self.config.BATCH_SIZE, draw_isolated=False, seed=199)
-        if wld_catalog:
-            param.wld_catalog = wld_catalog
-        np.random.seed(param.seed)
-        # Load input catalog
-        catalog = btk.get_input_catalog.load_catalog(
-            param, selection_function=selection_function)
-        # Generate catalogs of blended objects
-        blend_generator = btk.create_blend_generator.generate(
-            param, catalog, sampling_function)
-        # Generates observing conditions
-        observing_generator = btk.create_observing_generator.generate(
-            param, resid_obs_conditions)
-        # Generate images of blends in all the observing bands
-        draw_blend_generator = btk.draw_blends.generate(
-            param, blend_generator, observing_generator)
-        meas_params = Scarlet_resid_params()
-        meas_generator = btk.measure.generate(
-            meas_params, draw_blend_generator, param)
-        return meas_generator
 
     def get_detections(self, index):
         """
