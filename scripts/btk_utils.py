@@ -657,7 +657,8 @@ class Resid_btk_model(btk.compute_metrics.Metrics_params):
     def make_resid_model(self, catalog_name, count=256,
                          sampling_function=None, max_number=2,
                          augmentation=False, norm_val=None,
-                         selection_function=None, wld_catalog=None):
+                         selection_function=None, wld_catalog=None,
+                         meas_params=None):
         """Creates dataset and loads model"""
         # If no user input sampling function then set default function
         if not sampling_function:
