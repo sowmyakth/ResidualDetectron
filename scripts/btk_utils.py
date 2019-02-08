@@ -2,6 +2,7 @@
     on images with BlendingToolKit(btk).
 """
 import sys
+import os
 import sep
 import btk
 import numpy as np
@@ -10,8 +11,7 @@ from scipy import spatial
 import descwl
 import matplotlib.pyplot as plt
 from astropy.table import vstack
-ROOT_DIR = '/home/users/sowmyak/ResidualDetectron'
-sys.path.append(ROOT_DIR)  # To find local version of the library
+sys.path.insert(0,os.path.dirname(os.getcwd()))  # To find local version of the library
 from mrcnn import utils
 #import mrcnn.model_w_btk as model_btk
 import mrcnn.model_btk_only as model_btk
@@ -378,6 +378,50 @@ class Scarlet_resid_params(btk.measure.Measurement_params):
         return [model, selected_peaks]
 
 
+def get_psf_sky(obs_cond, psf_stamp_size):
+    """Returns PSF image and mean background sky level for input obs_condition.
+    """
+    mean_sky_level = obs_cond.mean_sky_level
+    psf = obs_cond.psf_model
+    psf_image = psf.drawImage(
+       nx=psf_stamp_size,
+       ny=psf_stamp_size).array
+    return psf_image, mean_sky_level
+
+
+def get_stack_catalog(image, obs_cond,
+                psf_stamp_size=41, min_pix=1,
+                thr_value=5, bkg_bin_size=32):
+    """Perform detection, deblending and measurement on the i band image of
+    the blend image for input index in the batch.
+     """
+    image_array = image.astype(np.float32)
+    psf_image, mean_sky_level = get_psf_sky(obs_cond, psf_stamp_size)
+    variance_array = image_array + mean_sky_level
+    psf_array = psf_image.astype(np.float64)
+    cat = btk.utils.run_stack(
+        image_array, variance_array, psf_array, min_pix=min_pix,
+        bkg_bin_size=bkg_bin_size, thr_value=thr_value)
+    cat_chldrn = cat[
+        (cat['deblend_nChild'] == 0) & (cat['base_SdssCentroid_flag'] == False)]
+    cat_chldrn = cat_chldrn.copy(deep=True)
+    return cat_chldrn.asAstropy()
+
+
+def get_stack_centers(catalog):
+    """Returns stack detected centroids
+    Args:
+        image: Input image (multi-band) to perform detection on
+               [bands, x, y].
+    Returns:
+        x and y coordinates of detected centroids.
+    """
+    xs = catalog['base_SdssCentroid_y']
+    ys = catalog['base_SdssCentroid_x']
+    q, = np.where((xs > 0) & (ys > 0))
+    return np.stack((ys[q],xs[q]),axis=1)
+
+
 class Stack_iter_params(btk.measure.Measurement_params):
     min_pix = 1
     bkg_bin_size = 32
@@ -390,50 +434,18 @@ class Stack_iter_params(btk.measure.Measurement_params):
         super(Stack_iter_params, self).__init__(*args, **kwargs)
         self.catalog={}
 
-    def get_psf_sky(self, obs_cond):
-        mean_sky_level = obs_cond.mean_sky_level
-        psf = obs_cond.psf_model
-        psf_image = psf.drawImage(
-           nx=self.psf_stamp_size,
-           ny=self.psf_stamp_size).array
-        return psf_image, mean_sky_level
-
-    def get_catalog(self, data, index):
-        """Perform detection, deblending and measurement on the i band image of
-        the blend image for input index in the batch.
-         """
-        image_array = data['blend_images'][index, :, :, 3].astype(np.float32)
-        psf_image, mean_sky_level = self.get_psf_sky(data['obs_condition'][index][3])
-        variance_array = image_array + mean_sky_level
-        psf_array = psf_image.astype(np.float64)
-        cat = btk.utils.run_stack(
-            image_array, variance_array, psf_array, min_pix=self.min_pix,
-            bkg_bin_size=self.bkg_bin_size, thr_value=self.thr_value)
-        cat_chldrn = cat[
-            (cat['deblend_nChild'] == 0) & (cat['base_SdssCentroid_flag'] == False)]
-        cat_chldrn = cat_chldrn.copy(deep=True)
-        return cat_chldrn.asAstropy()
-
-    def get_centers(self, catalog):
-        """Returns stack detected centroids
-        Args:
-            image: Input image (multi-band) to perform detection on
-                   [bands, x, y].
-        Returns:
-            x and y coordinates of detected centroids.
-        """
-        xs = catalog['base_SdssCentroid_y']
-        ys = catalog['base_SdssCentroid_x']
-        q, = np.where((xs > 0) & (ys > 0))
-        return np.stack((ys[q],xs[q]),axis=1)
-
     def get_deblended_images(self, data, index):
         """Returns scarlet modeled blend  and centers for the given blend"""
         images = np.transpose(data['blend_images'][index], axes=(2, 0, 1))
         blend_cat = data['blend_list'][index]
-        catalog = self.get_catalog(data, index)
+        catalog = get_stack_catalog(data['blend_images'][index, :, :, 3],
+                                    data['obs_condition'][index][3],
+                                    psf_stamp_size=self.psf_stamp_size,
+                                    min_pix=self.min_pix,
+                                    bkg_bin_size=self.bkg_bin_size,
+                                    thr_value=self.thr_value)
         self.catalog[index] = catalog
-        peaks = self.get_centers(catalog)
+        peaks = get_stack_centers(catalog)
         if len(peaks) == 0:
             return [data['blend_images'][index], peaks]
         bg_rms = [data['obs_condition'][index][i].mean_sky_level**0.5 for i in range(len(images))]      
@@ -692,7 +704,7 @@ class Resid_btk_model(btk.compute_metrics.Metrics_params):
         Args:
             index: Index of dataset to perform detection on.
         Returns:
-            x and y coordinates of iteratively detected cenetrs, cenetrs
+            x and y coordinates of iteratively detected centers, centers
             detected initially and true centers.
         Useful for evaluating model detection performance."""
         image, gt_bbox, gt_class_id = self.dataset.load_input()
@@ -704,3 +716,101 @@ class Resid_btk_model(btk.compute_metrics.Metrics_params):
             iter_detected_centers.append(resid_merge_centers(
                 detected_centers[i], r1['rois'], center_shift=0))
         return iter_detected_centers, detected_centers, true_centers
+
+
+def stack_resid_merge_centers(det_cent, resid_cent,
+                              distance_upper_bound=1):
+    """Combines centers detected by stack on image and in iterative step.
+    """
+    # remove duplicates
+    if len(resid_cent) == 0:
+        return det_cent
+    unique_det_cent = np.unique(det_cent, axis=0)
+    if len(unique_det_cent) == 0:
+        return resid_cent
+    z_tree = spatial.KDTree(unique_det_cent)
+    resid_cent = resid_cent.reshape(-1, 2)
+    match = z_tree.query(resid_cent,
+                         distance_upper_bound=distance_upper_bound)
+    trim = np.setdiff1d(range(len(unique_det_cent)), match[1])
+    trim_det_cent = [unique_det_cent[i] for i in trim]
+    if len(trim_det_cent) == 0:
+        return resid_cent
+    iter_det = np.vstack([trim_det_cent, resid_cent])
+    return iter_det
+
+
+class Stack_iter_btk_param(btk.compute_metrics.Metrics_params):
+    def __init__(self, catalog_name, batch_size=1, max_number=2,
+                 sampling_function=None, selection_function=None,
+                 wld_catalog=None, meas_params=None,
+                 *args, **kwargs):
+        super(Stack_iter_btk_param, self).__init__(*args, **kwargs)
+        if not sampling_function:
+            sampling_function = resid_general_sampling_function
+        self.meas_generator = make_meas_generator(
+            catalog_name, batch_size, max_number, sampling_function,
+            selection_function, wld_catalog, meas_params)
+
+    def get_resid_iter_detections(self, index):
+        """
+        Returns model detected centers and true center for data entry index.
+        Args:
+            index: Index of dataset to perform detection on.
+        Returns:
+            x and y coordinates of iteratively detected centers, centers
+            detected initially and true centers.
+        Useful for evaluating model detection performance."""
+        image, gt_bbox, gt_class_id = self.dataset.load_input()
+        true_centers = self.dataset.true_cent
+        detected_centers = self.dataset.det_cent
+        results1 = self.model.detect(image, verbose=0)
+        iter_detected_centers = []
+        for i, r1 in enumerate(results1):
+            iter_detected_centers.append(resid_merge_centers(
+                detected_centers[i], r1['rois'], center_shift=0))
+        return iter_detected_centers, detected_centers, true_centers
+
+    def get_centers(self, catalog):
+        """Return stack detected centers from input catalog.
+        """
+        xs = catalog['base_SdssCentroid_y']
+        ys = catalog['base_SdssCentroid_x']
+        q, = np.where((xs > 0) & (ys > 0))
+        return np.stack((xs[q], ys[q]), axis=1)
+
+    def get_iter_centers(self):
+        output, deb, cat = next(self.meas_generator)
+        self.output = output
+        self.deblend_output = deb
+        self.obs_cond = output['obs_condition']
+        resid_centers = []
+        self.det_cent, self.true_cent = [], []
+        for i in range(len(output['blend_list'])):
+            blend_image = output['blend_images'][i]
+            blend_list = output['blend_list'][i]
+            model_image = deb[i][0]
+            detected_centers = deb[i][1]
+            self.det_cent.append(detected_centers)
+            self.true_cent.append(
+                np.stack([blend_list['dx'], blend_list['dy']]).T)
+            resid_images = blend_image - model_image
+            resid_cat  = get_stack_catalog(resid_images[:, :, 3],
+                                           output['obs_condition'][i][3])
+            resid_centers.append(get_stack_centers(resid_cat))
+        return resid_centers
+
+    def get_stck_iter_detections(self, index):
+        """Returns model detected centers and true center for data entry index.
+        Args:
+            index: Index of dataset to perform detection on.
+        Returns:
+            x and y coordinates of iteratively detected centers, centers
+            detected initially and true centers.
+        Useful for evaluating model detection performance."""
+        results1 = self.get_iter_centers()
+        iter_detected_centers = []
+        for i, r1 in enumerate(results1):
+            iter_detected_centers.append(stack_resid_merge_centers(
+                self.det_cent[i], r1))
+        return iter_detected_centers
