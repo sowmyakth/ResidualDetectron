@@ -11,13 +11,9 @@ from scipy import spatial
 import descwl
 import matplotlib.pyplot as plt
 from astropy.table import vstack
-sys.path.insert(0,os.path.dirname(os.getcwd()))  # To find local version of the library
-ROOT_DIR = '/home/users/sowmyak/ResidualDetectron'
-sys.path.insert(0,ROOT_DIR)
-ROOT_DIR = '/home/users/sowmyak/ResidualDetectron/scripts'
-sys.path.insert(0,ROOT_DIR)
+# To find local version of the library
+sys.path.insert(0,os.path.dirname(os.getcwd()))
 from mrcnn import utils
-#import mrcnn.model_w_btk as model_btk
 import mrcnn.model_btk_only as model_btk
 
 
