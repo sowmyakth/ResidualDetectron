@@ -216,23 +216,21 @@ def resnet_graph(input_image, architecture, stage5=False, train_bn=True):
 def apply_box_deltas_graph(boxes, deltas):
     """Applies the given deltas to the given boxes.
     boxes: [N, (y1, x1, y2, x2)] boxes to update
-    deltas: [N, (dy, dx, log(dh), log(dw))] refinements to apply
+    deltas: [N, (dy, dx, log(dl)] refinements to apply
     """
-    # Convert to y, x, h, w
-    height = boxes[:, 2] - boxes[:, 0]
-    width = boxes[:, 3] - boxes[:, 1]
-    center_y = boxes[:, 0] + 0.5 * height
-    center_x = boxes[:, 1] + 0.5 * width
+    # Convert to y, x, l
+    length = boxes[:, 2] - boxes[:, 0]
+    center_y = boxes[:, 0] + 0.5 * length
+    center_x = boxes[:, 1] + 0.5 * length
     # Apply deltas
-    center_y += deltas[:, 0] * height
-    center_x += deltas[:, 1] * width
-    height *= tf.exp(deltas[:, 2])
-    width *= tf.exp(deltas[:, 3])
+    center_y += deltas[:, 0] * length
+    center_x += deltas[:, 1] * length
+    length *= tf.exp(deltas[:, 2])
     # Convert back to y1, x1, y2, x2
-    y1 = center_y - 0.5 * height
-    x1 = center_x - 0.5 * width
-    y2 = y1 + height
-    x2 = x1 + width
+    y1 = center_y - 0.5 * length
+    x1 = center_x - 0.5 * length
+    y2 = y1 + length
+    x2 = x1 + length
     result = tf.stack([y1, x1, y2, x2], axis=1, name="apply_box_deltas_out")
     return result
 
@@ -263,7 +261,7 @@ class ProposalLayer(KE.Layer):
 
     Inputs:
         rpn_probs: [batch, anchors, (bg prob, fg prob)]
-        rpn_bbox: [batch, anchors, (dy, dx, log(dh), log(dw))]
+        rpn_bbox: [batch, anchors, (dy, dx, log(dl))]
         anchors: [batch, (y1, x1, y2, x2)] anchors in normalized coordinates
 
     Returns:
@@ -281,7 +279,7 @@ class ProposalLayer(KE.Layer):
         scores = inputs[0][:, :, 1]
         # Box deltas [batch, num_rois, 4]
         deltas = inputs[1]
-        deltas = deltas * np.reshape(self.config.RPN_BBOX_STD_DEV, [1, 1, 4])
+        deltas = deltas * np.reshape(self.config.RPN_BBOX_STD_DEV, [1, 1, 3])
         # Anchors
         anchors = inputs[2]
 
@@ -383,13 +381,12 @@ class PyramidROIAlign(KE.Layer):
 
         # Assign each ROI to a level in the pyramid based on the ROI area.
         y1, x1, y2, x2 = tf.split(boxes, 4, axis=2)
-        h = y2 - y1
-        w = x2 - x1
+        l = y2 - y1
         # Equation 1 in the Feature Pyramid Networks paper. Account for
         # the fact that our coordinates are normalized here.
         # e.g. a 224x224 ROI (in pixels) maps to P4
         image_area = tf.cast(image_shape[0, 0] * image_shape[0, 1], tf.float32)
-        roi_level = log2_graph(tf.sqrt(h * w) / (224.0 / tf.sqrt(image_area)))
+        roi_level = log2_graph(l / (224.0 / tf.sqrt(image_area)))
         roi_level = tf.minimum(5, tf.maximum(
             2, 4 + tf.cast(tf.round(roi_level), tf.int32)))
         roi_level = tf.squeeze(roi_level, 2)
@@ -497,7 +494,7 @@ def detection_targets_graph(proposals, gt_class_ids, gt_boxes, config):
     Returns: Target ROIs and corresponding class IDs, bounding box shifts.
     rois: [TRAIN_ROIS_PER_IMAGE, (y1, x1, y2, x2)] in normalized coordinates
     class_ids: [TRAIN_ROIS_PER_IMAGE]. Integer class IDs. Zero padded.
-    deltas: [TRAIN_ROIS_PER_IMAGE, NUM_CLASSES, (dy, dx, log(dh), log(dw))]
+    deltas: [TRAIN_ROIS_PER_IMAGE, NUM_CLASSES, (dy, dx, log(dl))]
             Class-specific bbox refinements.
     Note: Returned arrays might be zero padded if not enough target ROIs.
     """
@@ -596,7 +593,7 @@ class DetectionTargetLayer(KE.Layer):
           coordinates
     target_class_ids: [batch, TRAIN_ROIS_PER_IMAGE]. Integer class IDs.
     target_deltas: [batch, TRAIN_ROIS_PER_IMAGE, NUM_CLASSES,
-                    (dy, dx, log(dh), log(dw), class_id)]
+                    (dy, dx, log(dl), class_id)]
                    Class-specific bbox refinements.
 
     Note: Returned arrays might be zero padded if not enough target ROIs.
@@ -625,7 +622,7 @@ class DetectionTargetLayer(KE.Layer):
         return [
             (None, self.config.TRAIN_ROIS_PER_IMAGE, 4),  # rois
             (None, 1),  # class_ids
-            (None, self.config.TRAIN_ROIS_PER_IMAGE, 4)  # deltas
+            (None, self.config.TRAIN_ROIS_PER_IMAGE, 3)  # deltas
         ]
 
     def compute_mask(self, inputs, mask=None):
@@ -643,7 +640,7 @@ def refine_detections_graph(rois, probs, deltas, window, config):
     Inputs:
         rois: [N, (y1, x1, y2, x2)] in normalized coordinates
         probs: [N, num_classes]. Class probabilities.
-        deltas: [N, num_classes, (dy, dx, log(dh), log(dw))]. Class-specific
+        deltas: [N, num_classes, (dy, dx, log(dl))]. Class-specific
                 bounding box deltas.
         window: (y1, x1, y2, x2) in image coordinates. The part of the image
             that contains the image excluding the padding.
@@ -784,7 +781,7 @@ def rpn_graph(feature_map, anchors_per_location, anchor_stride):
     Returns:
         rpn_logits: [batch, H, W, 2] Anchor classifier logits (before softmax)
         rpn_probs: [batch, H, W, 2] Anchor classifier probabilities.
-        rpn_bbox: [batch, H, W, (dy, dx, log(dh), log(dw))] Deltas to be
+        rpn_bbox: [batch, H, W, (dy, dx, log(dl))] Deltas to be
                   applied to anchors.
     """
     # TODO: check if stride of 2 causes alignment issues if the feature map
@@ -806,13 +803,13 @@ def rpn_graph(feature_map, anchors_per_location, anchor_stride):
     rpn_probs = KL.Activation(
         "softmax", name="rpn_class_xxx")(rpn_class_logits)
 
-    # Bounding box refinement. [batch, H, W, anchors per location, depth]
-    # where depth is [x, y, log(w), log(h)]
-    x = KL.Conv2D(anchors_per_location * 4, (1, 1), padding="valid",
+    # Bounding box refinement. [batch, L, anchors per location, depth]
+    # where depth is [x, y, log(l)]
+    x = KL.Conv2D(anchors_per_location * 3, (1, 1), padding="valid",
                   activation='linear', name='rpn_bbox_pred')(shared)
 
     # Reshape to [batch, anchors, 4]
-    rpn_bbox = KL.Lambda(lambda t: tf.reshape(t, [tf.shape(t)[0], -1, 4]))(x)
+    rpn_bbox = KL.Lambda(lambda t: tf.reshape(t, [tf.shape(t)[0], -1, 3]))(x)
 
     return [rpn_class_logits, rpn_probs, rpn_bbox]
 
@@ -892,11 +889,11 @@ def fpn_classifier_graph(rois, feature_maps, image_shape,
 
     # BBox head
     # [batch, boxes, num_classes * (dy, dx, log(dh), log(dw))]
-    x = KL.TimeDistributed(KL.Dense(num_classes * 4, activation='linear'),
+    x = KL.TimeDistributed(KL.Dense(num_classes * 3, activation='linear'),
                            name='mrcnn_bbox_fc')(shared)
-    # Reshape to [batch, boxes, num_classes, (dy, dx, log(dh), log(dw))]
+    # Reshape to [batch, boxes, num_classes, (dy, dx, log(dl))]
     s = K.int_shape(x)
-    mrcnn_bbox = KL.Reshape((s[1], num_classes, 4), name="mrcnn_bbox")(x)
+    mrcnn_bbox = KL.Reshape((s[1], num_classes, 3), name="mrcnn_bbox")(x)
 
     return mrcnn_class_logits, mrcnn_probs, mrcnn_bbox
 
@@ -944,11 +941,11 @@ def rpn_bbox_loss_graph(config, target_bbox, rpn_match, rpn_bbox):
     """Return the RPN bounding box loss graph.
 
     config: the model config object.
-    target_bbox: [batch, max positive anchors, (dy, dx, log(dh), log(dw))].
+    target_bbox: [batch, max positive anchors, (dy, dx, log(dl))].
         Uses 0 padding to fill in unsed bbox deltas.
     rpn_match: [batch, anchors, 1]. Anchor match type. 1=positive,
                -1=negative, 0=neutral anchor.
-    rpn_bbox: [batch, anchors, (dy, dx, log(dh), log(dw))]
+    rpn_bbox: [batch, anchors, (dy, dx, log(dl))]
     """
     # Positive anchors contribute to the loss, but negative and
     # neutral anchors (match value of 0 or -1) don't.
@@ -1174,12 +1171,12 @@ def build_rpn_targets(image_shape, anchors, gt_class_ids, gt_boxes, config):
     Returns:
     rpn_match: [N] (int32) matches between anchors and GT boxes.
                1 = positive anchor, -1 = negative anchor, 0 = neutral
-    rpn_bbox: [N, (dy, dx, log(dh), log(dw))] Anchor bbox deltas.
+    rpn_bbox: [N, (dy, dx, log(dl))] Anchor bbox deltas.
     """
     # RPN Match: 1 = positive anchor, -1 = negative anchor, 0 = neutral
     rpn_match = np.zeros([anchors.shape[0]], dtype=np.int32)
     # RPN bounding boxes: [max anchors per image, (dy, dx, log(dh), log(dw))]
-    rpn_bbox = np.zeros((config.RPN_TRAIN_ANCHORS_PER_IMAGE, 4))
+    rpn_bbox = np.zeros((config.RPN_TRAIN_ANCHORS_PER_IMAGE, 3))
     # Compute overlaps [num_anchors, num_gt_boxes]
     overlaps = utils.compute_overlaps(anchors, gt_boxes)
 
@@ -1231,102 +1228,28 @@ def build_rpn_targets(image_shape, anchors, gt_class_ids, gt_boxes, config):
 
         # Convert coordinates to center plus width/height.
         # GT Box
-        gt_h = gt[2] - gt[0]
-        gt_w = gt[3] - gt[1]
-        gt_center_y = gt[0] + 0.5 * gt_h
-        gt_center_x = gt[1] + 0.5 * gt_w
+        np.testing.assert_array_equal([gt[2] - gt[0]],
+                                      [gt[3] - gt[1]], "not a square")
+        gt_l = gt[2] - gt[0]
+        gt_center_y = gt[0] + 0.5 * gt_l
+        gt_center_x = gt[1] + 0.5 * gt_l
         # Anchor
-        a_h = a[2] - a[0]
-        a_w = a[3] - a[1]
-        a_center_y = a[0] + 0.5 * a_h
-        a_center_x = a[1] + 0.5 * a_w
+        assert a[2] - a[0] == a[3] - a[1], "not a square"
+        a_l = a[2] - a[0]
+        a_center_y = a[0] + 0.5 * a_l
+        a_center_x = a[1] + 0.5 * a_l
 
         # Compute the bbox refinement that the RPN should predict.
         rpn_bbox[ix] = [
-            (gt_center_y - a_center_y) / a_h,
-            (gt_center_x - a_center_x) / a_w,
-            np.log(gt_h / a_h),
-            np.log(gt_w / a_w),
+            (gt_center_y - a_center_y) / a_l,
+            (gt_center_x - a_center_x) / a_l,
+            np.log(gt_l / a_l),
         ]
         # Normalize
         rpn_bbox[ix] /= config.RPN_BBOX_STD_DEV
         ix += 1
 
     return rpn_match, rpn_bbox
-
-
-def generate_random_rois(image_shape, count, gt_class_ids, gt_boxes):
-    """Generates ROI proposals similar to what a region proposal network
-    would generate.
-
-    image_shape: [Height, Width, Depth]
-    count: Number of ROIs to generate
-    gt_class_ids: [N] Integer ground truth class IDs
-    gt_boxes: [N, (y1, x1, y2, x2)] Ground truth boxes in pixels.
-
-    Returns: [count, (y1, x1, y2, x2)] ROI boxes in pixels.
-    """
-    # placeholder
-    rois = np.zeros((count, 4), dtype=np.int32)
-
-    # Generate random ROIs around GT boxes (90% of count)
-    rois_per_box = int(0.9 * count / gt_boxes.shape[0])
-    for i in range(gt_boxes.shape[0]):
-        gt_y1, gt_x1, gt_y2, gt_x2 = gt_boxes[i]
-        h = gt_y2 - gt_y1
-        w = gt_x2 - gt_x1
-        # random boundaries
-        r_y1 = max(gt_y1 - h, 0)
-        r_y2 = min(gt_y2 + h, image_shape[0])
-        r_x1 = max(gt_x1 - w, 0)
-        r_x2 = min(gt_x2 + w, image_shape[1])
-
-        # To avoid generating boxes with zero area, we generate double what
-        # we need and filter out the extra. If we get fewer valid boxes
-        # than we need, we loop and try again.
-        while True:
-            y1y2 = np.random.randint(r_y1, r_y2, (rois_per_box * 2, 2))
-            x1x2 = np.random.randint(r_x1, r_x2, (rois_per_box * 2, 2))
-            # Filter out zero area boxes
-            threshold = 1
-            y1y2 = y1y2[np.abs(y1y2[:, 0] - y1y2[:, 1]) >=
-                        threshold][:rois_per_box]
-            x1x2 = x1x2[np.abs(x1x2[:, 0] - x1x2[:, 1]) >=
-                        threshold][:rois_per_box]
-            if y1y2.shape[0] == rois_per_box and x1x2.shape[0] == rois_per_box:
-                break
-
-        # Sort on axis 1 to ensure x1 <= x2 and y1 <= y2 and then reshape
-        # into x1, y1, x2, y2 order
-        x1, x2 = np.split(np.sort(x1x2, axis=1), 2, axis=1)
-        y1, y2 = np.split(np.sort(y1y2, axis=1), 2, axis=1)
-        box_rois = np.hstack([y1, x1, y2, x2])
-        rois[rois_per_box * i:rois_per_box * (i + 1)] = box_rois
-
-    # Generate random ROIs anywhere in the image (10% of count)
-    remaining_count = count - (rois_per_box * gt_boxes.shape[0])
-    # To avoid generating boxes with zero area, we generate double what
-    # we need and filter out the extra. If we get fewer valid boxes
-    # than we need, we loop and try again.
-    while True:
-        y1y2 = np.random.randint(0, image_shape[0], (remaining_count * 2, 2))
-        x1x2 = np.random.randint(0, image_shape[1], (remaining_count * 2, 2))
-        # Filter out zero area boxes
-        threshold = 1
-        y1y2 = y1y2[np.abs(y1y2[:, 0] - y1y2[:, 1]) >=
-                    threshold][:remaining_count]
-        x1x2 = x1x2[np.abs(x1x2[:, 0] - x1x2[:, 1]) >=
-                    threshold][:remaining_count]
-        if y1y2.shape[0] == remaining_count and x1x2.shape[0] == remaining_count:
-            break
-
-    # Sort on axis 1 to ensure x1 <= x2 and y1 <= y2 and then reshape
-    # into x1, y1, x2, y2 order
-    x1, x2 = np.split(np.sort(x1x2, axis=1), 2, axis=1)
-    y1, y2 = np.split(np.sort(y1y2, axis=1), 2, axis=1)
-    global_rois = np.hstack([y1, x1, y2, x2])
-    rois[-remaining_count:] = global_rois
-    return rois
 
 
 def data_generator(dataset, config, shuffle=True, augment=False,
@@ -1385,7 +1308,7 @@ def data_generator(dataset, config, shuffle=True, augment=False,
             batch_rpn_match = np.zeros(
                 [batch_size, anchors.shape[0], 1], dtype=np.int32)
             batch_rpn_bbox = np.zeros(
-                [batch_size, config.RPN_TRAIN_ANCHORS_PER_IMAGE, 4],
+                [batch_size, config.RPN_TRAIN_ANCHORS_PER_IMAGE, 3],
                 dtype=np.float32)
             batch_images = np.zeros(
                 (batch_size,) + tuple(config.IMAGE_SHAPE), dtype=np.float32)
@@ -1513,7 +1436,7 @@ class MaskRCNN():
             input_rpn_match = KL.Input(
                 shape=[None, 1], name="input_rpn_match", dtype=tf.int32)
             input_rpn_bbox = KL.Input(
-                shape=[None, 4], name="input_rpn_bbox", dtype=tf.float32)
+                shape=[None, 3], name="input_rpn_bbox", dtype=tf.float32)
 
             # Detection GT (class IDs, bounding boxes)
             # 1. GT Class IDs (zero padded)
@@ -1958,8 +1881,11 @@ class MaskRCNN():
                                          augmentation=augmentation,
                                          batch_size=self.config.BATCH_SIZE,
                                          no_augmentation_sources=no_augmentation_sources)
-        val_generator = data_generator(val_dataset, self.config, shuffle=True,
-                                       batch_size=self.config.BATCH_SIZE)
+        if val_dataset:
+            val_generator = data_generator(val_dataset, self.config, shuffle=True,
+                                           batch_size=self.config.BATCH_SIZE)
+        else:
+            val_generator = None
 
         # Callbacks
         callbacks = [
@@ -1996,7 +1922,7 @@ class MaskRCNN():
             callbacks=callbacks,
             validation_data=val_generator,
             validation_steps=self.config.VALIDATION_STEPS,
-            max_queue_size=100,
+            max_queue_size=10,
             workers=workers,
             use_multiprocessing=False,
         )
@@ -2073,7 +1999,6 @@ class MaskRCNN():
         if verbose:
             log("image_shape", image_shape)
             log("anchors", anchors)
-        print("detect shape", len(images), image_shape.shape, anchors.shape)
         # Run object detection
         detections, _, _, _, _, _ =\
             self.keras_model.predict([images, image_shape, anchors],
