@@ -12,6 +12,10 @@ import descwl
 import matplotlib.pyplot as plt
 from astropy.table import vstack
 sys.path.insert(0,os.path.dirname(os.getcwd()))  # To find local version of the library
+ROOT_DIR = '/home/users/sowmyak/ResidualDetectron'
+sys.path.insert(0,ROOT_DIR)
+ROOT_DIR = '/home/users/sowmyak/ResidualDetectron/scripts'
+sys.path.insert(0,ROOT_DIR)
 from mrcnn import utils
 #import mrcnn.model_w_btk as model_btk
 import mrcnn.model_btk_only as model_btk
@@ -99,6 +103,7 @@ def get_undetected(true_cat, meas_cent, obs_cond, distance_upper_bound=10):
     numer = true_cat['a_d']*true_cat['b_d']*true_cat['fluxnorm_disk'] + true_cat['a_b']*true_cat['b_b']*true_cat['fluxnorm_bulge']
     hlr = numer / (true_cat['fluxnorm_disk'] + true_cat['fluxnorm_bulge'])
     h = np.hypot(hlr, 1.18*psf_sigma)*2 / pixel_scale
+    h = np.array(h, dtype=np.int32)
     x0 = true_cat['dx'] - h/2
     y0 = true_cat['dy'] - h/2
     return x0[undetected], y0[undetected], h[undetected]
@@ -257,6 +262,7 @@ def resid_obs_conditions(Args, band):
         filter_band=band)
     survey['zenith_psf_fwhm'] = 0.67
     survey['exposure_time'] = 5520
+    survey['mirror_diameter'] = 0
     return survey
 
 
@@ -391,8 +397,8 @@ def get_psf_sky(obs_cond, psf_stamp_size):
 
 
 def get_stack_catalog(image, obs_cond,
-                psf_stamp_size=41, min_pix=1,
-                thr_value=5, bkg_bin_size=32):
+                      psf_stamp_size=41, min_pix=1,
+                      thr_value=5, bkg_bin_size=32):
     """Perform detection, deblending and measurement on the i band image of
     the blend image for input index in the batch.
      """
@@ -569,7 +575,7 @@ class ResidDataset(utils.Dataset):
         h0 = (bboxes[:, 2] - bboxes[:, 0]) / 2.
         x0 = np.mean(bboxes[:, 1::2], axis=1)
         y0 = np.mean(bboxes[:, ::2], axis=1)
-        aug_bbox = np.zeros((4, len(bboxes), 4))
+        aug_bbox = np.zeros((4, len(bboxes), 4), dtype=np.int32)
         for i in range(len(mult_x)):
             new_x0 = np.abs(end_pixel*mult_x[i] - x0)
             new_y0 = np.abs(end_pixel*mult_y[i] - y0)
@@ -639,11 +645,12 @@ class ResidDataset(utils.Dataset):
 class Resid_btk_model(btk.compute_metrics.Metrics_params):
     def __init__(self,  model_name, model_path, output_dir,
                  training=False, new_model_name=None, images_per_gpu=1,
-                 *args, **kwargs):
+                 validation_for_training=False, *args, **kwargs):
         super(Resid_btk_model, self).__init__(*args, **kwargs)
         self.training = training
         self.model_path = model_path
         self.output_dir = output_dir
+        self.validation_for_training = validation_for_training
         file_name = "train" + model_name
         train = __import__(file_name)
 
@@ -652,6 +659,8 @@ class Resid_btk_model(btk.compute_metrics.Metrics_params):
             IMAGES_PER_GPU = images_per_gpu
             STEPS_PER_EPOCH = 500  # 200
             VALIDATION_STEPS = 20
+            RPN_BBOX_STD_DEV = np.array([0.1, 0.1, 0.2])
+            BBOX_STD_DEV = np.array([0.1, 0.1, 0.2])
             if new_model_name:
                 NAME = new_model_name
 
@@ -685,23 +694,25 @@ class Resid_btk_model(btk.compute_metrics.Metrics_params):
             self.model = model_btk.MaskRCNN(mode="training",
                                             config=self.config,
                                             model_dir=self.output_dir)
-            val_meas_generator = make_meas_generator(catalog_name,
-                                                     self.config.BATCH_SIZE,
-                                                     max_number,
-                                                     sampling_function,
-                                                     selection_function,
-                                                     wld_catalog,
-                                                     meas_params)
-            self.dataset_val = ResidDataset(val_meas_generator,
-                                            norm_val=norm_val)
-            self.dataset_val.load_data(count=count)
-            self.dataset_val.prepare()
+            if self.validation_for_training:
+                val_meas_generator = make_meas_generator(catalog_name,
+                                                         self.config.BATCH_SIZE,
+                                                         max_number,
+                                                         sampling_function,
+                                                         selection_function,
+                                                         wld_catalog,
+                                                         meas_params)
+                self.dataset_val = ResidDataset(val_meas_generator,
+                                                norm_val=norm_val)
+                self.dataset_val.load_data(count=count)
+                self.dataset_val.prepare()
         else:
             self.model = model_btk.MaskRCNN(mode="inference",
                                             config=self.config,
                                             model_dir=self.output_dir)
-        print("Loading weights from ", self.model_path)
-        self.model.load_weights(self.model_path, by_name=True)
+        if self.model_path:
+            print("Loading weights from ", self.model_path)
+            self.model.load_weights(self.model_path, by_name=True)
 
     def get_detections(self, index):
         """
