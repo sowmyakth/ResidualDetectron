@@ -155,8 +155,8 @@ class Config(object):
     MAX_GT_INSTANCES = 100
 
     # Bounding box refinement standard deviation for RPN and final detections.
-    RPN_BBOX_STD_DEV = np.array([0.1, 0.1, 0.2, 0.2])
-    BBOX_STD_DEV = np.array([0.1, 0.1, 0.2, 0.2])
+    RPN_BBOX_STD_DEV = np.array([0.1, 0.1, 0.2])
+    BBOX_STD_DEV = np.array([0.1, 0.1, 0.2])
 
     # Max number of final detections
     DETECTION_MAX_INSTANCES = 100
