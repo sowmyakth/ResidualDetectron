@@ -383,6 +383,12 @@ class Scarlet_resid_params(btk.measure.Measurement_params):
 
 def get_psf_sky(obs_cond, psf_stamp_size):
     """Returns PSF image and mean background sky level for input obs_condition.
+    Args:
+        obs_cond: wld.survey class corresponding to observing conditions in the
+                  band in which PSF convolved HLR is to be estimated.
+        psf_stamp_size: Size of image to draw PSF model into (pixels).
+    Returns:
+        PSF image and mean background sky level
     """
     mean_sky_level = obs_cond.mean_sky_level
     psf = obs_cond.psf_model
@@ -397,7 +403,14 @@ def get_stack_catalog(image, obs_cond,
                       thr_value=5, bkg_bin_size=32):
     """Perform detection, deblending and measurement on the i band image of
     the blend image for input index in the batch.
-     """
+    Args:
+        image: Input image (multi-band) to perform detection on
+               [bands, x, y].
+        obs_cond: wld.survey class corresponding to observing conditions in the
+                  band in which PSF convolved HLR is to be estimated.
+    Returns
+        Stack detection (+ measurement) output catalog
+    """
     image_array = image.astype(np.float32)
     psf_image, mean_sky_level = get_psf_sky(obs_cond, psf_stamp_size)
     variance_array = image + mean_sky_level
@@ -412,10 +425,9 @@ def get_stack_catalog(image, obs_cond,
 
 
 def get_stack_centers(catalog):
-    """Returns stack detected centroids
+    """Returns stack detected centroids from detection catalog.
     Args:
-        image: Input image (multi-band) to perform detection on
-               [bands, x, y].
+        catalog: Stack detection output catalog
     Returns:
         x and y coordinates of detected centroids.
     """
@@ -467,7 +479,7 @@ class Stack_iter_params(btk.measure.Measurement_params):
         return [model, selected_peaks]
     
     def make_measurement(self, data, index):
-        """ Returns catlog from the deblending step which involved performing
+        """ Returns catalog from the deblending step which involved performing
         detection, deblending and measurement on the i band image of
         the blend image for input index in the batch using the DM stack.
          """
@@ -493,6 +505,7 @@ def make_meas_generator(catalog_name, batch_size, max_number,
             batch_size=batch_size, draw_isolated=False, seed=199)
         if wld_catalog:
             param.wld_catalog = wld_catalog
+        print("setting seed", param.seed)
         np.random.seed(param.seed)
         # Load input catalog
         catalog = btk.get_input_catalog.load_catalog(
@@ -507,6 +520,7 @@ def make_meas_generator(catalog_name, batch_size, max_number,
         draw_blend_generator = btk.draw_blends.generate(
             param, blend_generator, observing_generator)
         if meas_params is None:
+            print("scarlet_resid_params")
             meas_params = Scarlet_resid_params()
         meas_generator = btk.measure.generate(
             meas_params, draw_blend_generator, param)
@@ -759,6 +773,7 @@ class Stack_iter_btk_param(btk.compute_metrics.Metrics_params):
                  *args, **kwargs):
         super(Stack_iter_btk_param, self).__init__(*args, **kwargs)
         if not sampling_function:
+            print("resid_sampling")
             sampling_function = resid_general_sampling_function
         self.meas_generator = make_meas_generator(
             catalog_name, batch_size, max_number, sampling_function,
@@ -783,15 +798,9 @@ class Stack_iter_btk_param(btk.compute_metrics.Metrics_params):
                 detected_centers[i], r1['rois'], center_shift=0))
         return iter_detected_centers, detected_centers, true_centers
 
-    def get_centers(self, catalog):
-        """Return stack detected centers from input catalog.
-        """
-        xs = catalog['base_SdssCentroid_y']
-        ys = catalog['base_SdssCentroid_x']
-        q, = np.where((xs > 0) & (ys > 0))
-        return np.stack((xs[q], ys[q]), axis=1)
-
     def get_iter_centers(self):
+        """Performs stack detection on residual image and returns detected
+        centroids."""
         output, deb, cat = next(self.meas_generator)
         self.output = output
         self.deblend_output = deb
