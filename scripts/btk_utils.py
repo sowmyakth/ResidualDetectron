@@ -340,11 +340,16 @@ def scarlet_fit(images, peaks,
 
 
 class Scarlet_resid_params(btk.measure.Measurement_params):
-    iters = 400
-    e_rel = .015
-    detect_centers = True
+    def __init__(self, iters=400, e_rel=.015,
+                 detect_centers=True, detect_coadd=False,
+                 *args, **kwargs):
+        super(Scarlet_resid_params, self).__init__(*args, **kwargs)
+        self.iters = iters
+        self.e_rel = e_rel
+        self.detect_centers = detect_centers
+        self.detect_coadd = detect_coadd
 
-    def get_centers(self, image):
+    def get_centers_coadd(self, image):
         """Runs SEP on coadd of input image and returns detected centroids
         Args:
             image: Input image (multi-band) to perform detection on
@@ -358,12 +363,29 @@ class Scarlet_resid_params(btk.measure.Measurement_params):
         q, = np.where((catalog['x'] > 0) & (catalog['y'] > 0))
         return np.stack((catalog['x'][q], catalog['y'][q]), axis=1)
 
+    def get_centers_i_band(self, image):
+        """Runs SEP on i band of input image and returns detected centroids
+        Args:
+            image: Input image (multi-band) to perform detection on
+                   [bands, x, y].
+        Returns:
+            x and y coordinates of detected centroids.
+        """
+        detect = image[3]  # simple average for detection
+        bkg = sep.Background(detect)
+        catalog = sep.extract(detect, 1.5, err=bkg.globalrms)
+        q, = np.where((catalog['x'] > 0) & (catalog['y'] > 0))
+        return np.stack((catalog['x'][q], catalog['y'][q]), axis=1)
+
     def get_deblended_images(self, data, index):
         """Returns scarlet modeled blend  and centers for the given blend"""
         images = np.transpose(data['blend_images'][index], axes=(2, 0, 1))
         blend_cat = data['blend_list'][index]
         if self.detect_centers:
-            peaks = self.get_centers(images)
+            if self.detect_coadd:
+                peaks = self.get_centers_i_band(images)
+            else:
+                peaks = self.get_centers_coadd(images)
         else:
             peaks = np.stack((blend_cat['dx'], blend_cat['dy']), axis=1)
         if len(peaks) == 0:
@@ -397,8 +419,39 @@ def get_psf_sky(obs_cond, psf_stamp_size):
        ny=psf_stamp_size).array
     return psf_image, mean_sky_level
 
+def get_stack_input(image, obs_cond, psf_stamp_size, detect_coadd):
+    """Returns input for running stack detection on either coadd image or
+    i band.
+    Args:
+        image: Input image (multi-band) to perform detection on
+               [bands, x, y].
+        obs_cond: wld.survey class corresponding to observing conditions in the
+                  band in which PSF convolved HLR is to be estimated.
+        psf_stamp_size: Size of image to draw PSF model into (pixels).
+        detect_coadd: If True then stack detection (and measurement) is
+                      performed on coadd over bands
+    Returns
+        image, variance image and psf image
+    """
+    if detect_coadd:
+        input_image = np.zeros(image.shape[1:2], dtype=np.float32)
+        variance_image = np.zeros(image.shape[1:2], dtype=np.float32)
+        for i in range(len(obs_cond)):
+            psf_image, mean_sky_level = get_psf_sky(obs_cond[i],
+                                                    psf_stamp_size)
+            variance_image += image[:, :, i] + mean_sky_level
+            input_image += image[:, :, i]
+    else:
+        i = 3 # detection in i band
+        psf_image, mean_sky_level = get_psf_sky(obs_cond[i],
+                                                psf_stamp_size)
+        variance_image += image[:, :, i] + mean_sky_level
+        input_image += image[:, :, i]
+    # since PSF is same for all bands, PSF of coadd is the same
+    return input_image, variance_image, psf_image
 
-def get_stack_catalog(image, obs_cond,
+
+def get_stack_catalog(image, obs_cond, detect_coadd=False,
                       psf_stamp_size=41, min_pix=1,
                       thr_value=5, bkg_bin_size=32):
     """Perform detection, deblending and measurement on the i band image of
@@ -411,12 +464,11 @@ def get_stack_catalog(image, obs_cond,
     Returns
         Stack detection (+ measurement) output catalog
     """
-    image_array = image.astype(np.float32)
-    psf_image, mean_sky_level = get_psf_sky(obs_cond, psf_stamp_size)
-    variance_array = image + mean_sky_level
+    image_array, variance_array, psf_image = get_stack_input(
+        image, obs_cond, psf_stamp_size, detect_coadd)
     psf_array = psf_image.astype(np.float64)
     cat = btk.utils.run_stack(
-        image_array, variance_array.astype(np.float32), psf_array, min_pix=min_pix,
+        image_array, variance_array, psf_array, min_pix=min_pix,
         bkg_bin_size=bkg_bin_size, thr_value=thr_value)
     cat_chldrn = cat[
         (cat['deblend_nChild'] == 0) & (cat['base_SdssCentroid_flag'] == False)]
@@ -445,20 +497,22 @@ class Stack_iter_params(btk.measure.Measurement_params):
     iters = 200
     e_rel = .015
     
-    def __init__(self,*args, **kwargs):
+    def __init__(self, detect_coadd=False, *args, **kwargs):
         super(Stack_iter_params, self).__init__(*args, **kwargs)
+        self.detect_coadd = detect_coadd
         self.catalog={}
 
     def get_deblended_images(self, data, index):
         """Returns scarlet modeled blend  and centers for the given blend"""
         images = np.transpose(data['blend_images'][index], axes=(2, 0, 1))
-        blend_cat = data['blend_list'][index]
-        catalog = get_stack_catalog(data['blend_images'][index, :, :, 3],
-                                    data['obs_condition'][index][3],
+        catalog = get_stack_catalog(data['blend_images'][index],
+                                    data['obs_condition'][index],
+                                    detect_coadd=self.detect_coadd,
                                     psf_stamp_size=self.psf_stamp_size,
                                     min_pix=self.min_pix,
                                     bkg_bin_size=self.bkg_bin_size,
                                     thr_value=self.thr_value)
+        
         self.catalog[index] = catalog
         peaks = get_stack_centers(catalog)
         if len(peaks) == 0:
@@ -769,7 +823,7 @@ def stack_resid_merge_centers(det_cent, resid_cent,
 class Stack_iter_btk_param(btk.compute_metrics.Metrics_params):
     def __init__(self, catalog_name, batch_size=1, max_number=2,
                  sampling_function=None, selection_function=None,
-                 wld_catalog=None, meas_params=None,
+                 wld_catalog=None, meas_params=None, detect_coadd=False,
                  *args, **kwargs):
         super(Stack_iter_btk_param, self).__init__(*args, **kwargs)
         if not sampling_function:
@@ -778,6 +832,7 @@ class Stack_iter_btk_param(btk.compute_metrics.Metrics_params):
         self.meas_generator = make_meas_generator(
             catalog_name, batch_size, max_number, sampling_function,
             selection_function, wld_catalog, meas_params)
+        self.detect_coadd = detect_coadd
 
     def get_resid_iter_detections(self, index):
         """
@@ -817,7 +872,8 @@ class Stack_iter_btk_param(btk.compute_metrics.Metrics_params):
                 np.stack([blend_list['dx'], blend_list['dy']]).T)
             resid_images = blend_image - model_image
             resid_cat  = get_stack_catalog(resid_images[:, :, 3],
-                                           output['obs_condition'][i][3])
+                                           output['obs_condition'][i][3],
+                                           detect_coadd=self.detect_coadd)
             resid_centers.append(get_stack_centers(resid_cat))
         return resid_centers
 
