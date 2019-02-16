@@ -95,6 +95,7 @@ def get_undetected(true_cat, meas_cent, obs_cond, distance_upper_bound=10):
         undetected = np.setdiff1d(range(len(true_cat)), match[1])
     numer = true_cat['a_d']*true_cat['b_d']*true_cat['fluxnorm_disk'] + true_cat['a_b']*true_cat['b_b']*true_cat['fluxnorm_bulge']
     hlr = numer / (true_cat['fluxnorm_disk'] + true_cat['fluxnorm_bulge'])
+    assert ~np.any(np.isnan(hlr)), "FOUND NAN"
     h = np.hypot(hlr, 1.18*psf_sigma)*2 / pixel_scale
     h = np.array(h, dtype=np.int32)
     x0 = true_cat['dx'] - h/2
@@ -672,6 +673,7 @@ class ResidDataset(utils.Dataset):
             blend_images = output['blend_images'][i]
             blend_list = output['blend_list'][i]
             model_images = deb[i][0]
+            model_images[np.isnan(model_images)] = 0
             detected_centers = deb[i][1]
             self.det_cent.append(detected_centers)
             self.true_cent.append(
@@ -681,6 +683,7 @@ class ResidDataset(utils.Dataset):
             x, y, h = get_undetected(blend_list, detected_centers,
                                      self.obs_cond[i][3])
             bbox = np.array([y, x, y+h, x+h], dtype=np.int32).T
+            assert ~np.any(np.isnan(bbox)), "FOUND NAN"
             bbox = np.concatenate((bbox, [[0, 0, 1, 1]]))
             class_ids = np.concatenate((np.ones(len(x), dtype=np.int32), [0]))
             if self.augmentation:
@@ -695,6 +698,7 @@ class ResidDataset(utils.Dataset):
                 input_class_ids.append(class_ids)
         input_images = np.array(input_images, dtype=np.float32)
         input_images = self.normalize_images(input_images)
+        assert ~np.any(np.isnan(input_images)), "FOUND NAN"
         return input_images, input_bboxes, input_class_ids
 
     def image_reference(self, image_id):
