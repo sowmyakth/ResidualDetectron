@@ -433,8 +433,8 @@ def get_stack_input(image, obs_cond, psf_stamp_size, detect_coadd):
         image, variance image and psf image
     """
     if detect_coadd:
-        input_image = np.zeros(image.shape[1:2], dtype=np.float32)
-        variance_image = np.zeros(image.shape[1:2], dtype=np.float32)
+        input_image = np.zeros(image.shape[0:2], dtype=np.float32)
+        variance_image = np.zeros(image.shape[0:2], dtype=np.float32)
         for i in range(len(obs_cond)):
             psf_image, mean_sky_level = get_psf_sky(obs_cond[i],
                                                     psf_stamp_size)
