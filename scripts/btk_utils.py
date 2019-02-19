@@ -445,7 +445,8 @@ def get_stack_input(image, obs_cond, psf_stamp_size, detect_coadd):
         psf_image, mean_sky_level = get_psf_sky(obs_cond[i],
                                                 psf_stamp_size)
         variance_image = image[:, :, i] + mean_sky_level
-        input_image = image[:, :, i]
+        variance_image = np.array(variance_image, dtype=np.float32)
+        input_image = np.array(image[:, :, i], dtype=np.float32)
     # since PSF is same for all bands, PSF of coadd is the same
     return input_image, variance_image, psf_image
 
