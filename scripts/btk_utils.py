@@ -46,6 +46,8 @@ def resid_merge_centers(det_cent, bbox,
     # centers of bbox as mean of edges
     resid_det = np.dstack([np.mean(bbox[q, 1::2], axis=1) - center_shift,
                            np.mean(bbox[q, ::2], axis=1) - center_shift])[0]
+    if len(det_cent) == 0:
+        return resid_det
     unique_det_cent = np.unique(det_cent, axis=0)
     if len(unique_det_cent) == 0:
         return resid_det
