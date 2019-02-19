@@ -880,8 +880,8 @@ class Stack_iter_btk_param(btk.compute_metrics.Metrics_params):
             self.true_cent.append(
                 np.stack([blend_list['dx'], blend_list['dy']]).T)
             resid_images = blend_image - model_image
-            resid_cat = get_stack_catalog(resid_images[:, :, 3],
-                                          output['obs_condition'][i][3],
+            resid_cat = get_stack_catalog(resid_images,
+                                          output['obs_condition'][i],
                                           detect_coadd=self.detect_coadd)
             resid_centers.append(get_stack_centers(resid_cat))
         return resid_centers
