@@ -810,6 +810,8 @@ def stack_resid_merge_centers(det_cent, resid_cent,
     # remove duplicates
     if len(resid_cent) == 0:
         return det_cent
+    if len(det_cent) == 0:
+        return resid_cent
     unique_det_cent = np.unique(det_cent, axis=0)
     if len(unique_det_cent) == 0:
         return resid_cent
