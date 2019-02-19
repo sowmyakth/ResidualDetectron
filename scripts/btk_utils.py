@@ -356,7 +356,7 @@ class Scarlet_resid_params(btk.measure.Measurement_params):
             x and y coordinates of detected centroids.
         """
         detect = image.mean(axis=0)  # simple average for detection
-        bkg = sep.Background(detect)
+        bkg = sep.Background(detect, bw=32, bh=32)
         catalog = sep.extract(detect, 1.5, err=bkg.globalrms)
         q, = np.where((catalog['x'] > 0) & (catalog['y'] > 0))
         return np.stack((catalog['x'][q], catalog['y'][q]), axis=1)
@@ -369,8 +369,8 @@ class Scarlet_resid_params(btk.measure.Measurement_params):
         Returns:
             x and y coordinates of detected centroids.
         """
-        detect = image[3]  # simple average for detection
-        bkg = sep.Background(detect)
+        detect = np.array(image[3, :, :], dtype=np.float32)  # simple average for detection
+        bkg = sep.Background(detect, bw=32, bh=32)
         catalog = sep.extract(detect, 1.5, err=bkg.globalrms)
         q, = np.where((catalog['x'] > 0) & (catalog['y'] > 0))
         return np.stack((catalog['x'][q], catalog['y'][q]), axis=1)
@@ -381,9 +381,9 @@ class Scarlet_resid_params(btk.measure.Measurement_params):
         blend_cat = data['blend_list'][index]
         if self.detect_centers:
             if self.detect_coadd:
-                peaks = self.get_centers_i_band(images)
-            else:
                 peaks = self.get_centers_coadd(images)
+            else:
+                peaks = self.get_centers_i_band(images)
         else:
             peaks = np.stack((blend_cat['dx'], blend_cat['dy']), axis=1)
         if len(peaks) == 0:
