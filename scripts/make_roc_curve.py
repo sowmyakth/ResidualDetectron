@@ -49,7 +49,7 @@ def get_undetected(true_cat, meas_cent, obs_cond, distance_upper_bound=10):
     h = np.array(h, dtype=np.int32)
     x0 = true_cat['dx'] - h/2
     y0 = true_cat['dy'] - h/2
-    return x0[undetected], y0[undetected], h[undetected], undetected
+    return x0[undetected], y0[undetected], h[undetected]
 
 
 def load_input(dataset):
@@ -66,8 +66,8 @@ def load_input(dataset):
     detected_centers = deb[0][1]
     resid_images = blend_images - model_images
     image = np.dstack([resid_images, model_images])
-    x, y, h, undetect = get_undetected(blend_list, detected_centers,
-                                       obs_cond[3])
+    x, y, h = get_undetected(blend_list, detected_centers,
+                             obs_cond[3])
     bbox = np.array([y, x, y+h, x+h], dtype=np.int32).T
     assert ~np.any(np.isnan(bbox)), "FOUND NAN"
     bbox = np.concatenate((bbox, [[0, 0, 1, 1]]))
@@ -79,7 +79,7 @@ def load_input(dataset):
     input_images = dataset.normalize_images(input_images)
     assert ~np.any(np.isnan(input_images)), "FOUND NAN"
     output = [input_images, input_bboxes, input_class_ids,
-              blend_list[undetect], detected_centers]
+              blend_list, detected_centers]
     return output
 
 
@@ -94,35 +94,39 @@ def get_detections(model):
     Useful for evaluating model detection performance."""
     image, gt_bbox, gt_class_id, blend_list, detected_centers = load_input(
         model.dataset)
-    results = model.detect(image, verbose=0)[0]
+    results = model.model.detect(image, verbose=0)[0]
     return results, blend_list, detected_centers
 
 
 def run_model_without_threshold(Args):
     """Test performance for btk input blends"""
+    nms_thresholds = [0.2, 0.3, 0.4]
     norm = [1.9844158727667542, 413.83759806375525,
             51.2789974336363, 1038.4760551905683]
-    count = 4000  # 40000
+    count = 5000  # 40000
     catalog_name = os.path.join(DATA_PATH, 'OneDegSq.fits')
     # Define parameters for mrcnn model with btk here
     resid_model = btk_utils.Resid_btk_model(
         Args.model_name, Args.model_path, MODEL_DIR, training=False,
         images_per_gpu=1)
     resid_model.config.DETECTION_MIN_CONFIDENCE = 0
+    resid_model.config.DETECTION_NMS_THRESHOLD = nms_thresholds[int(Args.run_number)]
     resid_model.config.display()
     # Load parametrs for dataset and load model
     meas_params = btk_utils.Scarlet_resid_params(detect_coadd=True)
     resid_model.make_resid_model(catalog_name, count=count,
                                  max_number=2, norm_val=norm,
                                  meas_params=meas_params)
-    results = {'blend_list': [], 'detected_centers': []}
-    # np.random.seed(0)
+    results = {}
+    np.random.seed(1234)
     for i in range(count):
+        results[i] = {}
         r1, blend_list1, detected_centers1 = get_detections(resid_model)
         results[i]['model_op'] = r1
         results[i]['blend_list'] = blend_list1
         results[i]['detected_centers'] = detected_centers1
-    name = f"model_without_threshold"
+    name = os.path.join(
+        DATA_PATH, "resid_results/model_without_threshold_" + Args.run_number)
     with open(name + ".dill", 'wb') as handle:
         dill.dump(results, handle)
 
@@ -140,35 +144,50 @@ def match_detections(detected_centers, true_centers,
     inf, = np.where(match[0] == np.inf)  # no match within distance_upper_bound
     detected = np.unique(match[1][fin])
     undetected = np.setdiff1d(range(len(true_centers)), match[1][fin])
-    spurious = np.unique(match[1][inf])
+    spurious = match[1][inf]
     return detected, undetected, spurious
 
 
-def get_roc_point(filename, threshold):
+def get_roc_point(in_filename, threshold, out_filename):
     columns = ['total', 'detected', 'undetected', 'spurious']
     columns += ['tp', 'fp', 'tn', 'fn']
-    with open(filename, 'rb') as handle:
+    with open(in_filename, 'rb') as handle:
         results = dill.load(handle)
     output = pd.DataFrame(np.zeros((len(results), len(columns))),
                           columns=columns)
     for i in results:
         true_centers = np.stack(
             [results[i]['blend_list']['dx'], results[i]['blend_list']['dy']]).T
-        q, = np.where(results[i]['model_op']['score'] > threshold)
+        q, = np.where(results[i]['model_op']['scores'] > threshold)
         detected_centers = results[i]['detected_centers']
         iter_detected_centers = btk_utils.resid_merge_centers(
                 detected_centers, results[i]['model_op']['rois'][q],
                 center_shift=0)
         detected, undetected, spurious = match_detections(
             iter_detected_centers, true_centers)
+        sep_detected, sep_undetected, sep_spurious = match_detections(
+            detected_centers, true_centers)
         output.loc[i, 'total'] = len(true_centers)
         output.loc[i, 'detected'] = len(detected)
         output.loc[i, 'undetected'] = len(undetected)
         output.loc[i, 'spurious'] = len(spurious)
-        output.loc[i, 'tp'] = len(detected)
+        output.loc[i, 'tp'] = len(detected) - len(sep_detected)
         output.loc[i, 'fn'] = len(undetected)
-        if (len(true_centers) == 0) & (len(spurious) == 0):
-            output.loc[i, 'fp'] = 1
+        output.loc[i, 'fp'] = len(spurious)
+        if (len(true_centers) == len(sep_detected)) & (len(spurious) == 0):
+            output.loc[i, 'tn'] = 1
+    output.to_csv(out_filename)
+
+
+def get_roc_curve(Args):
+    thresholds = [0, 0.1, 0.4, 0.6, 0.7, 0.8, 0.9,
+                  0.95, 0.96, 0.97, 0.98, 0.99, 0.999]
+    in_filename = os.path.join(
+        DATA_PATH, f"resid_results/model_without_threshold_{Args.run_number}.dill")
+    for threshold in thresholds:
+        out_name = f"resid_results/roc_{Args.run_number}_threshold_{threshold:.2f}.pd"
+        out_filename = os.path.join(DATA_PATH, out_name)
+        get_roc_point(in_filename, threshold, out_filename)
 
 
 if __name__ == '__main__':
@@ -178,5 +197,8 @@ if __name__ == '__main__':
                         help="Name of model to evaluate")
     parser.add_argument('--model_path', type=str,
                         help="Saved weights of model")
+    parser.add_argument('--run_number', type=str,
+                        help="Run number for nms threshold", default=0)
     args = parser.parse_args()
     run_model_without_threshold(args)
+    get_roc_curve(args)
