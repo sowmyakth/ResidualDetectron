@@ -40,7 +40,10 @@ def resid_merge_centers(det_cent, bbox,
     """
     # remove duplicates
     if len(bbox) == 0:
-        return det_cent
+        if len(det_cent) == 0:
+            return []
+        else:
+            return np.unique(det_cent, axis=0)
     q, = np.where(
         (bbox[:, 0] > 3+center_shift) & (bbox[:, 1] > 3+center_shift))
     # centers of bbox as mean of edges
@@ -49,8 +52,6 @@ def resid_merge_centers(det_cent, bbox,
     if len(det_cent) == 0:
         return resid_det
     unique_det_cent = np.unique(det_cent, axis=0)
-    if len(unique_det_cent) == 0:
-        return resid_det
     z_tree = spatial.KDTree(unique_det_cent)
     resid_det = resid_det.reshape(-1, 2)
     match = z_tree.query(resid_det,
@@ -240,7 +241,7 @@ def group_sampling_function(Args, catalog, min_group_size=5):
 def basic_selection_function(catalog):
     """Apply selection cuts to the input catalog"""
     a = np.hypot(catalog['a_d'], catalog['a_b'])
-    q, = np.where((a <= 2) & (catalog['i_ab'] <= 26))
+    q, = np.where((a <= 2) & (a > 0.2) & (catalog['i_ab'] <= 26))
     return catalog[q]
 
 
@@ -578,7 +579,7 @@ def make_meas_generator(catalog_name, batch_size, max_number,
         draw_blend_generator = btk.draw_blends.generate(
             param, blend_generator, observing_generator)
         if meas_params is None:
-            print("scarlet_resid_params")
+            print("Setting scarlet_resid_paramsa as meas_params")
             meas_params = Scarlet_resid_params()
         meas_generator = btk.measure.generate(
             meas_params, draw_blend_generator, param)
@@ -736,7 +737,8 @@ class Resid_btk_model(btk.compute_metrics.Metrics_params):
                 NAME = new_model_name
 
         self.config = InferenceConfig()
-        self.config.display()
+        if self.training:
+            self.config.display()
 
     def make_resid_model(self, catalog_name, count=256,
                          sampling_function=None, max_number=2,
@@ -778,6 +780,7 @@ class Resid_btk_model(btk.compute_metrics.Metrics_params):
                 self.dataset_val.load_data(count=count)
                 self.dataset_val.prepare()
         else:
+            print(self.config.DETECTION_MIN_CONFIDENCE)
             self.model = model_btk.MaskRCNN(mode="inference",
                                             config=self.config,
                                             model_dir=self.output_dir)
@@ -811,12 +814,13 @@ def stack_resid_merge_centers(det_cent, resid_cent,
     """
     # remove duplicates
     if len(resid_cent) == 0:
-        return det_cent
+        if len(det_cent) == 0:
+            return []
+        else:
+            return np.unique(det_cent, axis=0)
     if len(det_cent) == 0:
         return resid_cent
     unique_det_cent = np.unique(det_cent, axis=0)
-    if len(unique_det_cent) == 0:
-        return resid_cent
     z_tree = spatial.KDTree(unique_det_cent)
     resid_cent = resid_cent.reshape(-1, 2)
     match = z_tree.query(resid_cent,
