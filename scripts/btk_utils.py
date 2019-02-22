@@ -197,7 +197,7 @@ def new_sampling_function(Args, catalog):
     return blend_catalog
 
 
-def group_sampling_function(Args, catalog, min_group_size=5):
+def group_sampling_function(Args, catalog, min_group_size=2):
     """Blends are defined from *groups* of galaxies from the Cat-Sim like
     catalog previously analyzed with WLD. Function selects galaxies
     Note: the pre-run WLD images are not used here. We only use the pre-run
@@ -227,8 +227,8 @@ def group_sampling_function(Args, catalog, min_group_size=5):
     blend_catalog['ra'] += dx
     blend_catalog['dec'] += dy
     # make sure galaxy centers don't lie too close to edge
-    cond1 = np.abs(blend_catalog['ra']) < Args.stamp_size/2. - 3
-    cond2 = np.abs(blend_catalog['dec']) < Args.stamp_size/2. - 3
+    cond1 = np.abs(blend_catalog['ra']) < Args.stamp_size/2. - 5
+    cond2 = np.abs(blend_catalog['dec']) < Args.stamp_size/2. - 5
     no_boundary = blend_catalog[cond1 & cond2]
     if len(no_boundary) == 0:
         return no_boundary
@@ -241,7 +241,7 @@ def group_sampling_function(Args, catalog, min_group_size=5):
 def basic_selection_function(catalog):
     """Apply selection cuts to the input catalog"""
     a = np.hypot(catalog['a_d'], catalog['a_b'])
-    q, = np.where((a <= 2) & (a > 0.2) & (catalog['i_ab'] <= 26))
+    q, = np.where((a <= 2) & (a > 0.2) & (catalog['i_ab'] <= 26.5))
     return catalog[q]
 
 
@@ -654,6 +654,7 @@ class ResidDataset(utils.Dataset):
                 [new_y0 - h0, new_x0 - h0, new_y0 + h0, new_x0 + h0])
             new_bbox = np.transpose(new_bbox, axes=(1, 0,))
             aug_bbox[i] = new_bbox
+        assert ~np.any(np.isnan(aug_bbox)), "FOUND NAN"
         return aug_bbox
 
     def augment_data(self, images, bboxes, class_ids):
@@ -687,6 +688,9 @@ class ResidDataset(utils.Dataset):
             x, y, h = get_undetected(blend_list, detected_centers,
                                      self.obs_cond[i][3])
             bbox = np.array([y, x, y+h, x+h], dtype=np.int32).T
+            assert ~np.any(np.isnan(x)), "FOUND NAN"
+            assert ~np.any(np.isnan(y)), "FOUND NAN"
+            assert ~np.any(np.isnan(h)), "FOUND NAN"
             assert ~np.any(np.isnan(bbox)), "FOUND NAN"
             bbox = np.concatenate((bbox, [[0, 0, 1, 1]]))
             class_ids = np.concatenate((np.ones(len(x), dtype=np.int32), [0]))
