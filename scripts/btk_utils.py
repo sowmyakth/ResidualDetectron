@@ -499,7 +499,7 @@ class Stack_iter_params(btk.measure.Measurement_params):
     bkg_bin_size = 32
     thr_value = 5
     psf_stamp_size = 41
-    iters = 200
+    iters = 400
     e_rel = .015
 
     def __init__(self, detect_coadd=False, *args, **kwargs):
