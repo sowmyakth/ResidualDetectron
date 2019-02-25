@@ -37,8 +37,9 @@ def detection_i_band(Args):
             it_det, it_undet, it_spur = btk.compute_metrics.evaluate_detection(
                 iter_detected[i], true[i])
             # print(it_det, it_undet, it_spur)
+            unique_sep_detected = np.unique(sep_detected[i], axis=0)
             sep_det, sep_undet, sep_spur = btk.compute_metrics.evaluate_detection(
-                sep_detected[i], true[i])
+                unique_sep_detected, true[i])
             # print(sep_det, sep_undet, sep_spur)
             results.append(
                 [len(true[i]), it_det, it_undet, it_spur, sep_det, sep_undet, sep_spur])
