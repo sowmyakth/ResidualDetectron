@@ -259,12 +259,12 @@ def resid_obs_conditions(Args, band):
         filter_band=band)
     survey['zenith_psf_fwhm'] = 0.67
     survey['exposure_time'] = 5520
-    survey['mirror_diameter'] = 0
+    #survey['mirror_diameter'] = 0
     return survey
 
 
 def scarlet_initialize(images, peaks,
-                       bg_rms, iters, e_rel):
+                       bg_rms):
     """ Deblend input images with scarlet
     Args:
         images: Numpy array of multi-band image to run scarlet on
@@ -295,7 +295,7 @@ def scarlet_initialize(images, peaks,
 
 
 def scarlet_multi_initialize(images, peaks,
-                             bg_rms, iters, e_rel):
+                             bg_rms):
     """ Initializes scarlet MultiComponentSource at locations input as
     peaks in the (multi-band) input images.
     Args:
@@ -328,11 +328,11 @@ def scarlet_fit(images, peaks,
     """Fits a scarlet model for the input image and centers"""
     try:
         blend = scarlet_multi_initialize(images, peaks,
-                                         bg_rms, iters, e_rel)
+                                         bg_rms)
         blend.fit(iters, e_rel=e_rel)
     except (np.linalg.LinAlgError, ValueError):
         blend = scarlet_initialize(images, peaks,
-                                   bg_rms, iters, e_rel)
+                                   bg_rms)
         try:
             blend.fit(iters, e_rel=e_rel)
         except(np.linalg.LinAlgError, ValueError):
@@ -341,7 +341,7 @@ def scarlet_fit(images, peaks,
 
 
 class Scarlet_resid_params(btk.measure.Measurement_params):
-    def __init__(self, iters=400, e_rel=.015,
+    def __init__(self, iters=200, e_rel=.015,
                  detect_centers=True, detect_coadd=False,
                  *args, **kwargs):
         super(Scarlet_resid_params, self).__init__(*args, **kwargs)
@@ -381,6 +381,7 @@ class Scarlet_resid_params(btk.measure.Measurement_params):
     def get_deblended_images(self, data, index):
         """Returns scarlet modeled blend  and centers for the given blend"""
         images = np.transpose(data['blend_images'][index], axes=(2, 0, 1))
+        images[np.isnan(images)] = 0
         blend_cat = data['blend_list'][index]
         if self.detect_centers:
             if self.detect_coadd:
@@ -499,7 +500,7 @@ class Stack_iter_params(btk.measure.Measurement_params):
     bkg_bin_size = 32
     thr_value = 5
     psf_stamp_size = 41
-    iters = 400
+    iters = 200
     e_rel = .015
 
     def __init__(self, detect_coadd=False, *args, **kwargs):
