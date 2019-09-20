@@ -1228,8 +1228,12 @@ def build_rpn_targets(image_shape, anchors, gt_class_ids, gt_boxes, config):
 
         # Convert coordinates to center plus width/height.
         # GT Box
-        np.testing.assert_array_equal([gt[2] - gt[0]],
-                                      [gt[3] - gt[1]], "not a square")
+        try:
+            np.testing.assert_array_equal([gt[2] - gt[0]],
+                                          [gt[3] - gt[1]], "not a square")
+        except AssertionError:
+            print("Not square!!!", gt[2] - gt[0], gt[3] - gt[1])
+            gt[3]  =  gt[1] + gt[2] - gt[0]
         gt_l = gt[2] - gt[0]
         gt_center_y = gt[0] + 0.5 * gt_l
         gt_center_x = gt[1] + 0.5 * gt_l
