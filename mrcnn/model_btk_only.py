@@ -381,12 +381,12 @@ class PyramidROIAlign(KE.Layer):
 
         # Assign each ROI to a level in the pyramid based on the ROI area.
         y1, x1, y2, x2 = tf.split(boxes, 4, axis=2)
-        l = y2 - y1
+        length = y2 - y1
         # Equation 1 in the Feature Pyramid Networks paper. Account for
         # the fact that our coordinates are normalized here.
         # e.g. a 224x224 ROI (in pixels) maps to P4
         image_area = tf.cast(image_shape[0, 0] * image_shape[0, 1], tf.float32)
-        roi_level = log2_graph(l / (224.0 / tf.sqrt(image_area)))
+        roi_level = log2_graph(length / (224.0 / tf.sqrt(image_area)))
         roi_level = tf.minimum(5, tf.maximum(
             2, 4 + tf.cast(tf.round(roi_level), tf.int32)))
         roi_level = tf.squeeze(roi_level, 2)
@@ -756,7 +756,7 @@ class DetectionLayer(KE.Layer):
             self.config.IMAGES_PER_GPU)
 
         # Reshape output
-        # [batch, num_detections, (y1, x1, y2, x2, class_score)] in
+        # [batch, num_detections, (y1, x1, y2, x2, class_id, class_score)] in
         # normalized coordinates
         return tf.reshape(
             detections_batch,
@@ -868,7 +868,8 @@ def fpn_classifier_graph(rois, feature_maps, image_shape,
         [rois, image_shape] + feature_maps)
     # Two 1024 FC layers (implemented with Conv2D for consistency)
     x = KL.TimeDistributed(KL.Conv2D(fc_layers_size, (pool_size, pool_size),
-                           padding="valid"), name="mrcnn_class_conv1")(x)
+                                     padding="valid"),
+                           name="mrcnn_class_conv1")(x)
     x = KL.TimeDistributed(
         BatchNorm(), name='mrcnn_class_bn1')(x, training=train_bn)
     x = KL.Activation('relu')(x)
@@ -888,7 +889,7 @@ def fpn_classifier_graph(rois, feature_maps, image_shape,
                                      name="mrcnn_class")(mrcnn_class_logits)
 
     # BBox head
-    # [batch, boxes, num_classes * (dy, dx, log(dh), log(dw))]
+    # [batch, boxes, num_classes * (dy, dx, log(dl))]
     x = KL.TimeDistributed(KL.Dense(num_classes * 3, activation='linear'),
                            name='mrcnn_bbox_fc')(shared)
     # Reshape to [batch, boxes, num_classes, (dy, dx, log(dl))]
@@ -1233,7 +1234,7 @@ def build_rpn_targets(image_shape, anchors, gt_class_ids, gt_boxes, config):
                                           [gt[3] - gt[1]], "not a square")
         except AssertionError:
             print("Not square!!!", gt[2] - gt[0], gt[3] - gt[1])
-            gt[3]  =  gt[1] + gt[2] - gt[0]
+            gt[3] = gt[1] + gt[2] - gt[0]
         gt_l = gt[2] - gt[0]
         gt_center_y = gt[0] + 0.5 * gt_l
         gt_center_x = gt[1] + 0.5 * gt_l
