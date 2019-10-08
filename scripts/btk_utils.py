@@ -3,6 +3,7 @@
 """
 import sep
 import btk
+import btk.config
 import os
 import numpy as np
 import scarlet
@@ -12,6 +13,7 @@ import matplotlib.pyplot as plt
 import astropy.table
 from mrcnn import utils
 import mrcnn.model_btk_only as model_btk
+import mrcnn.config_btk_only
 
 
 def get_ax(rows=1, cols=1, size=4):
@@ -283,7 +285,7 @@ def resid_obs_conditions(Args, band):
         filter_band=band)
     survey['zenith_psf_fwhm'] = 0.67
     survey['exposure_time'] = 5520
-    #survey['mirror_diameter'] = 0
+    # survey['mirror_diameter'] = 0
     return survey
 
 
@@ -396,7 +398,8 @@ class Scarlet_resid_params(btk.measure.Measurement_params):
         Returns:
             x and y coordinates of detected centroids.
         """
-        detect = np.array(image[3, :, :], dtype=np.float32)  # simple average for detection
+        # simple average for detection
+        detect = np.array(image[3, :, :], dtype=np.float32)
         bkg = sep.Background(detect, bw=32, bh=32)
         catalog = sep.extract(detect, 1.5, err=bkg.globalrms)
         q, = np.where((catalog['x'] > 0) & (catalog['y'] > 0))
@@ -532,7 +535,6 @@ class Stack_iter_params(btk.measure.Measurement_params):
 
     def get_only_peaks(self, data, index):
         """Returns scarlet modeled blend  and centers for the given blend"""
-        images = np.transpose(data['blend_images'][index], axes=(2, 0, 1))
         catalog = get_stack_catalog(data['blend_images'][index],
                                     data['obs_condition'][index],
                                     detect_coadd=self.detect_coadd,
@@ -559,7 +561,7 @@ class Stack_iter_params(btk.measure.Measurement_params):
         if len(peaks) == 0:
             print("Unable to create scarlet model, no peaks")
             temp_model = np.zeros_like(data['blend_images'][index])
-            return {'scarlet_model':temp_model, 'scarlet_peaks': []}
+            return {'scarlet_model': temp_model, 'scarlet_peaks': []}
         bg_rms = [data['obs_condition'][index][i].mean_sky_level**0.5 for i in range(len(images))]
         try:
             blend = scarlet_fit(images, peaks,
@@ -569,8 +571,9 @@ class Stack_iter_params(btk.measure.Measurement_params):
             model = np.transpose(blend.get_model(), axes=(1, 2, 0))
         except(ValueError, IndexError) as e:
             print("Unable to create scarlet model")
+            print(e)
             temp_model = np.zeros_like(data['blend_images'][index])
-            return {'scarlet_model':temp_model, 'scarlet_peaks': []}
+            return {'scarlet_model': temp_model, 'scarlet_peaks': []}
         return {'scarlet_model': model, 'scarlet_peaks': selected_peaks}
 
     def make_measurement(self, data, index):
@@ -628,6 +631,7 @@ class ResidDataset(utils.Dataset):
     shapes (triangles, squares, circles) placed randomly on a blank surface.
     The images are generated on the fly. No file access required.
     """
+
     def __init__(self, meas_generator, norm_val=None,
                  augmentation=False, i_mag_lim=30, *args, **kwargs):
         super(ResidDataset, self).__init__(*args, **kwargs)
@@ -758,25 +762,23 @@ class ResidDataset(utils.Dataset):
 
 class Resid_btk_model(object):
     def __init__(self, model_name, model_path, output_dir,
-                 training=False, new_model_name=None, images_per_gpu=1,
+                 training=False, images_per_gpu=1,
                  validation_for_training=False, *args, **kwargs):
+        self.model_name = model_name
         self.training = training
         self.model_path = model_path
         self.output_dir = output_dir
         self.validation_for_training = validation_for_training
-        file_name = "train" + model_name
-        train = __import__(file_name)
 
-        class InferenceConfig(train.InputConfig):
+        class InferenceConfig(mrcnn.config_btk_only.Config):
+            NAME = self.model_name
             GPU_COUNT = 1
             IMAGES_PER_GPU = images_per_gpu
             STEPS_PER_EPOCH = 500  # 200
             VALIDATION_STEPS = 20
             RPN_BBOX_STD_DEV = np.array([0.1, 0.1, 0.2])
             BBOX_STD_DEV = np.array([0.1, 0.1, 0.2])
-            DETECTION_MIN_CONFIDENCE = 0.965# 0.95
-            if new_model_name:
-                NAME = new_model_name
+            DETECTION_MIN_CONFIDENCE = 0.965  # 0.95
 
         self.config = InferenceConfig()
         if self.training:
@@ -834,29 +836,23 @@ class Resid_btk_model(object):
 
 class Resid_btk_model_gold(object):
     def __init__(self, model_name, model_path, output_dir,
-                 training=False, new_model_name=None, images_per_gpu=1,
+                 training=False, images_per_gpu=1,
                  validation_for_training=False, *args, **kwargs):
+        self.model_name = model_name
         self.training = training
         self.model_path = model_path
         self.output_dir = output_dir
         self.validation_for_training = validation_for_training
-        file_name = "train" + model_name
-        train = __import__(file_name)
 
-        class InferenceConfig(train.InputConfig):
+        class InferenceConfig(mrcnn.config_btk_only.Config):
+            NAME = self.model_name
             GPU_COUNT = 1
             IMAGES_PER_GPU = images_per_gpu
             STEPS_PER_EPOCH = 500  # 200
             VALIDATION_STEPS = 20
             RPN_BBOX_STD_DEV = np.array([0.1, 0.1, 0.2])
             BBOX_STD_DEV = np.array([0.1, 0.1, 0.2])
-            DETECTION_MIN_CONFIDENCE = 0.965# 0.95
-            if new_model_name:
-                NAME = new_model_name
-
-        self.config = InferenceConfig()
-        if self.training:
-            self.config.display()
+            DETECTION_MIN_CONFIDENCE = 0.965  # 0.95
 
     def make_resid_model_gold(self, catalog_name, count=256,
                               sampling_function=None, max_number=2,

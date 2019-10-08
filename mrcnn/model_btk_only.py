@@ -1,8 +1,6 @@
 """
-Mask R-CNN
-The main Mask R-CNN model implementation.
-# Edited to perform just detection on resilduals
-# Remove all scripts associated with predicting segmentation masks
+Modified implementation of Mask R-CNN implementation.
+# Edited to perform just detection on residual images
 
 Copyright (c) 2017 Matterport, Inc.
 Licensed under the MIT License (see LICENSE for details)
@@ -13,7 +11,6 @@ import os
 import datetime
 import re
 import math
-import logging
 from collections import OrderedDict
 import multiprocessing
 import numpy as np
@@ -24,7 +21,7 @@ import keras.layers as KL
 import keras.engine as KE
 import keras.models as KM
 
-from mrcnn import utils
+from mrcnn import utils_btk_only as utils
 
 # Requires TensorFlow 1.3+ and Keras 2.0.8+.
 from distutils.version import LooseVersion
@@ -58,6 +55,7 @@ class BatchNorm(KL.BatchNormalization):
     so this layer is often frozen (via setting in Config class) and functions
     as linear layer.
     """
+
     def call(self, inputs, training=None):
         """
         Note about training values:
@@ -827,7 +825,7 @@ def build_rpn_model(anchor_stride, anchors_per_location, depth):
     Returns a Keras Model object. The model outputs, when called, are:
     rpn_logits: [batch, H, W, 2] Anchor classifier logits (before softmax)
     rpn_probs: [batch, W, W, 2] Anchor classifier probabilities.
-    rpn_bbox: [batch, H, W, (dy, dx, log(dh), log(dw))] Deltas to be
+    rpn_bbox: [batch, H, W, (dy, dx, log(dl))] Deltas to be
                 applied to anchors.
     """
     input_feature_map = KL.Input(shape=[None, None, depth],
@@ -859,7 +857,7 @@ def fpn_classifier_graph(rois, feature_maps, image_shape,
     Returns:
         logits: [N, NUM_CLASSES] classifier logits (before softmax)
         probs: [N, NUM_CLASSES] classifier probabilities
-        bbox_deltas: [N, (dy, dx, log(dh), log(dw))] Deltas to apply to
+        bbox_deltas: [N, (dy, dx, log(dl))] Deltas to apply to
                      proposal boxes
     """
     # ROI Pooling
@@ -994,9 +992,9 @@ def mrcnn_class_loss_graph(target_class_ids, pred_class_logits):
 def mrcnn_bbox_loss_graph(target_bbox, target_class_ids, pred_bbox):
     """Loss for Mask R-CNN bounding box refinement.
 
-    target_bbox: [batch, num_rois, (dy, dx, log(dh), log(dw))]
+    target_bbox: [batch, num_rois, (dy, dx, log(dl))]
     target_class_ids: [batch, num_rois]. Integer class IDs.
-    pred_bbox: [batch, num_rois, num_classes, (dy, dx, log(dh), log(dw))]
+    pred_bbox: [batch, num_rois, num_classes, (dy, dx, log(dl))]
     """
     # Reshape to merge batch and roi dimensions for simplicity.
     target_class_ids = K.reshape(target_class_ids, (-1,))
@@ -1040,7 +1038,7 @@ def build_rpn_targets(image_shape, anchors, gt_class_ids, gt_boxes, config):
     """
     # RPN Match: 1 = positive anchor, -1 = negative anchor, 0 = neutral
     rpn_match = np.zeros([anchors.shape[0]], dtype=np.int32)
-    # RPN bounding boxes: [max anchors per image, (dy, dx, log(dh), log(dw))]
+    # RPN bounding boxes: [max anchors per image, (dy, dx, log(dl))]
     rpn_bbox = np.zeros((config.RPN_TRAIN_ANCHORS_PER_IMAGE, 3))
     # Compute overlaps [num_anchors, num_gt_boxes]
     overlaps = utils.compute_overlaps(anchors, gt_boxes)
@@ -1234,7 +1232,7 @@ class MaskRCNN():
         if h / 2**6 != int(h / 2**6) or w / 2**6 != int(w / 2**6):
             raise Exception("Image size must be dividable by 2 at least 6 times "
                             "to avoid fractions when downscaling and upscaling."
-                            "For example, use 256, 320, 384, 448, 512, ... etc. ")
+                            "For example, use 128, 256, 320, 384, 448,... etc. ")
 
         # Inputs
         input_image = KL.Input(
@@ -1266,7 +1264,7 @@ class MaskRCNN():
         # Build the shared convolutional layers.
         # Bottom-up Layers
         # Returns a list of the last layers of each stage, 5 in total.
-        # Don't create the thead (stage 5), so we pick the 4th item in the list
+        # Don't create the head (stage 5), so we pick the 4th item in the list
         if callable(config.BACKBONE):
             _, C2, C3, C4, C5 = config.BACKBONE(input_image, stage5=True,
                                                 train_bn=config.TRAIN_BN)
@@ -1296,7 +1294,14 @@ class MaskRCNN():
         P6 = KL.MaxPooling2D(pool_size=(1, 1), strides=2, name="fpn_p6")(P5)
 
         # Note that P6 is used in RPN, but not in the classifier heads.
-        rpn_feature_maps = [P2, P3, P4, P5, P6]
+        if config.SKIP_P2_RPN:
+            # Skip P2 layer in RPN prediction
+            # Make sure only 4 anchors scales and backbone strides are input
+            assert len(config.RPN_ANCHOR_SCALES) == 4, "only 4 anchor scales"
+            assert len(config.BACKBONE_STRIDES) == 4, "only 4 backbone strides"
+            rpn_feature_maps = [P3, P4, P5, P6]
+        else:
+            rpn_feature_maps = [P2, P3, P4, P5, P6]
         mrcnn_feature_maps = [P2, P3, P4, P5]
 
         # Anchors
