@@ -23,6 +23,7 @@ class Config(object):
     # Useful if your code needs to do things differently depending on which
     # experiment is running.
     NAME = None  # Override in sub-classes
+    IMAGE_SHAPE = np.array([128, 128, 12])
 
     # NUMBER OF GPUs to use. For CPU training, use 1
     GPU_COUNT = 1
@@ -100,36 +101,6 @@ class Config(object):
     # ROIs kept after non-maximum suppression (training and inference)
     POST_NMS_ROIS_TRAINING = 100
     POST_NMS_ROIS_INFERENCE = 100
-
-    # Input image resizing
-    # Generally, use the "square" resizing mode for training and predicting
-    # and it should work well in most cases. In this mode, images are scaled
-    # up such that the small side is = IMAGE_MIN_DIM, but ensuring that the
-    # scaling doesn't make the long side > IMAGE_MAX_DIM. Then the image is
-    # padded with zeros to make it a square so multiple images can be put
-    # in one batch.
-    # Available resizing modes:
-    # none:   No resizing or padding. Return the image unchanged.
-    # square: Resize and pad with zeros to get a square image
-    #         of size [max_dim, max_dim].
-    # pad64:  Pads width and height with zeros to make them multiples of 64.
-    #         If IMAGE_MIN_DIM or IMAGE_MIN_SCALE are not None, then it scales
-    #         up before padding. IMAGE_MAX_DIM is ignored in this mode.
-    #         The multiple of 64 is needed to ensure smooth scaling of feature
-    #         maps up and down the 6 levels of the FPN pyramid (2**6=64).
-    # crop:   Picks random crops from the image. First, scales the image based
-    #         on IMAGE_MIN_DIM and IMAGE_MIN_SCALE, then picks a random crop of
-    #         size IMAGE_MIN_DIM x IMAGE_MIN_DIM. Can be used in training only.
-    #         IMAGE_MAX_DIM is not used in this mode.
-    IMAGE_RESIZE_MODE = "square"
-    IMAGE_MIN_DIM = 800
-    IMAGE_MAX_DIM = 1024
-    # Minimum scaling ratio. Checked after MIN_IMAGE_DIM and can force further
-    # up scaling. For example, if set to 2 then images are scaled up to double
-    # the width and height, or more, even if MIN_IMAGE_DIM doesn't require it.
-    # However, in 'square' mode, it can be overruled by IMAGE_MAX_DIM.
-    IMAGE_MIN_SCALE = 0
-
     # Image mean (RGB)
     MEAN_PIXEL = np.zeros(12)
 
@@ -202,15 +173,6 @@ class Config(object):
         """Set values of computed attributes."""
         # Effective batch size
         self.BATCH_SIZE = self.IMAGES_PER_GPU * self.GPU_COUNT
-
-        # Input image size
-        if self.IMAGE_RESIZE_MODE == "crop":
-            self.IMAGE_SHAPE = np.array(
-                [self.IMAGE_MIN_DIM, self.IMAGE_MIN_DIM, 12])
-        else:
-            self.IMAGE_SHAPE = np.array(
-                [self.IMAGE_MAX_DIM, self.IMAGE_MAX_DIM, 12])
-
         # If true then RPN_ANCHOR_SCALES must have only 4 values
         if self.SKIP_P2_RPN is True and (len(self.RPN_ANCHOR_SCALES) != 4 or len(self.BACKBONE_STRIDES) != 4):
             raise Exception("If SKIP_P2_RPN then input four anchor scales")
