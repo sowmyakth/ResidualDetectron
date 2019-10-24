@@ -114,10 +114,12 @@ def get_undetected(true_cat_all, meas_cent, obs_cond,
     hlr = numer / (true_cat['fluxnorm_disk'] + true_cat['fluxnorm_bulge'])
     assert ~np.any(np.isnan(hlr)), "FOUND NAN"
     h = np.hypot(hlr, 1.18*psf_sigma)*2 / pixel_scale
-    h = np.array(h, dtype=np.int32)
     x0 = true_cat['dx'] - h/2
     y0 = true_cat['dy'] - h/2
-    return x0[undetected], y0[undetected], h[undetected]
+    h_arr = np.array(h, dtype=np.int32)[undetected]
+    x0_arr = np.array(x0, dtype=np.int32)[undetected]
+    y0_arr = np.array(y0, dtype=np.int32)[undetected]
+    return x0_arr, y0_arr, h_arr
 
 
 def get_random_shift(Args, number_of_objects, maxshift=None):
@@ -189,6 +191,35 @@ def resid_general_sampling_function(Args, catalog):
     blend_catalog['dec'] += dy
     # Shift center of all objects so that the blend isn't exactly in the center
     dx, dy = get_random_shift(Args, 1, maxshift=5*Args.pixel_scale)
+    return blend_catalog
+
+
+def resid_general_sampling_function_large(Args, catalog):
+    """Randomly picks entries from input catalog that are brighter than 25.3
+    mag in the i band. The centers are randomly distributed within 1/5 of the
+    stamp size.
+    At least one bright galaxy (i<=24) is always selected.
+    Preferrentially select larger galaxies. Also offset from center is larger.
+    """
+    number_of_objects = np.random.randint(1, Args.max_number)
+    a = np.hypot(catalog['a_d'], catalog['a_b'])
+    cond = (a <= 3) & (a > 0.6)
+    q_bright, = np.where(cond & (catalog['i_ab'] <= 24))
+    q, = np.where(cond & (catalog['i_ab'] <= 25.3))
+    blend_catalog = astropy.table.vstack(
+        [catalog[np.random.choice(q_bright, size=1)],
+         catalog[np.random.choice(q, size=number_of_objects)]])
+    blend_catalog['ra'], blend_catalog['dec'] = 0., 0.
+    # keep number density of objects constant
+    maxshift = Args.stamp_size/20.*number_of_objects**0.5
+    dx, dy = get_random_shift(Args, number_of_objects + 1,
+                              maxshift=maxshift)
+    blend_catalog['ra'] += dx
+    blend_catalog['dec'] += dy
+    # Shift center of all objects so that the blend isn't exactly in the center
+    dx, dy = get_random_shift(Args, 1, maxshift=30*Args.pixel_scale)
+    blend_catalog['ra'] += dx
+    blend_catalog['dec'] += dy
     return blend_catalog
 
 
@@ -442,8 +473,8 @@ def get_psf_sky(obs_cond, psf_stamp_size):
     mean_sky_level = obs_cond.mean_sky_level
     psf = obs_cond.psf_model
     psf_image = psf.drawImage(
-       nx=psf_stamp_size,
-       ny=psf_stamp_size).array
+        nx=psf_stamp_size,
+        ny=psf_stamp_size).array
     return psf_image, mean_sky_level
 
 
@@ -633,11 +664,15 @@ class ResidDataset(utils.Dataset):
     """
 
     def __init__(self, meas_generator, norm_val=None,
-                 augmentation=False, i_mag_lim=30, *args, **kwargs):
+                 augmentation=False, i_mag_lim=30, input_pull=False,
+                 norm_limit=None, input_model_mapping=False,
+                 *args, **kwargs):
         super(ResidDataset, self).__init__(*args, **kwargs)
         self.meas_generator = meas_generator
         self.augmentation = augmentation
         self.i_mag_lim = i_mag_lim
+        self.input_pull = input_pull
+        self.input_model_mapping = input_model_mapping
         if norm_val:
             self.mean1 = norm_val[0]
             self.std1 = norm_val[1]
@@ -648,6 +683,7 @@ class ResidDataset(utils.Dataset):
             self.std1 = 416.16687641284665
             self.mean2 = 63.16814480535191
             self.std2 = 2346.133101333463
+        self.norm_limit = norm_limit
 
     def load_data(self, count=None):
         """loads training and test input and output data
@@ -678,6 +714,20 @@ class ResidDataset(utils.Dataset):
     def normalize_images(self, images):
         images[:, :, :, 0:6] = (images[:, :, :, 0:6] - self.mean1)/self.std1
         images[:, :, :, 6:12] = (images[:, :, :, 6:12] - self.mean2)/self.std2
+        return images
+
+    def normalize_images_with_lim(self, images):
+        """Saturate at +-lim"""
+        images[:, :, :, 0:6] = (images[:, :, :, 0:6] - self.mean1)/self.std1
+        images[:, :, :, 6:12] = (images[:, :, :, 6:12] - self.mean2)/self.std2
+        if isinstance(self.norm_limit, list):
+            assert len(self.norm_limit) == 2, "norm_limit must be None or "\
+                "2-element list"
+            images[images < self.norm_limit[0]] = self.norm_limit[0]
+            images[images > self.norm_limit[1]] = self.norm_limit[1]
+        else:
+            assert self.norm_limit is None, "norm_limit must be None or "\
+                "2-element list"
         return images
 
     def augment_bbox(self, bboxes, end_pixel):
@@ -726,6 +776,13 @@ class ResidDataset(utils.Dataset):
             self.true_cent.append(
                 np.stack([blend_list['dx'], blend_list['dy']]).T)
             resid_images = blend_images - model_images
+            if self.input_pull:
+                bg_rms = [c.mean_sky_level for c in self.obs_cond[i]]
+                resid_images /= np.sqrt(np.array(bg_rms) + blend_images)
+            if self.input_model_mapping:
+                stretch = 0.1
+                Q = 3
+                model_images = np.arcsinh(Q*model_images/stretch)/Q
             image = np.dstack([resid_images, model_images])
             x, y, h = get_undetected(blend_list, detected_centers,
                                      self.obs_cond[i][3], self.i_mag_lim)
@@ -747,7 +804,7 @@ class ResidDataset(utils.Dataset):
                 input_bboxes.append(bbox)
                 input_class_ids.append(class_ids)
         input_images = np.array(input_images, dtype=np.float32)
-        input_images = self.normalize_images(input_images)
+        input_images = self.normalize_images_with_lim(input_images)
         assert ~np.any(np.isnan(input_images)), "FOUND NAN"
         return input_images, input_bboxes, input_class_ids
 
@@ -763,7 +820,8 @@ class ResidDataset(utils.Dataset):
 class Resid_btk_model(object):
     def __init__(self, model_name, model_path, output_dir,
                  training=False, images_per_gpu=1,
-                 validation_for_training=False, *args, **kwargs):
+                 validation_for_training=False,
+                 *args, **kwargs):
         self.model_name = model_name
         self.training = training
         self.model_path = model_path
@@ -783,12 +841,15 @@ class Resid_btk_model(object):
         self.config = InferenceConfig()
         if self.training:
             self.config.display()
+        else:
+            self.config.TRAIN_BN = False
 
     def make_resid_model(self, catalog_name, count=256,
                          sampling_function=None, max_number=2,
                          augmentation=False, norm_val=None,
                          selection_function=None, wld_catalog_name=None,
-                         meas_params=None):
+                         meas_params=None, input_pull=False,
+                         input_model_mapping=False):
         """Creates dataset and loads model"""
         # If no user input sampling function then set default function
         if not sampling_function:
@@ -801,7 +862,9 @@ class Resid_btk_model(object):
                                                   wld_catalog_name,
                                                   meas_params)
         self.dataset = ResidDataset(self.meas_generator, norm_val=norm_val,
-                                    augmentation=augmentation)
+                                    augmentation=augmentation,
+                                    input_pull=input_pull,
+                                    input_model_mapping=input_model_mapping)
         self.dataset.load_data(count=count)
         self.dataset.prepare()
         if augmentation:
@@ -819,8 +882,10 @@ class Resid_btk_model(object):
                                                          selection_function,
                                                          wld_catalog_name,
                                                          meas_params)
-                self.dataset_val = ResidDataset(val_meas_generator,
-                                                norm_val=norm_val)
+                self.dataset_val = ResidDataset(
+                    val_meas_generator, norm_val=norm_val,
+                    input_pull=input_pull,
+                    input_model_mapping=input_model_mapping)
                 self.dataset_val.load_data(count=count)
                 self.dataset_val.prepare()
         else:
