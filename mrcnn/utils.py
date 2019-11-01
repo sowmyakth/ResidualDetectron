@@ -906,4 +906,4 @@ def denorm_boxes(boxes, shape):
     h, w = shape
     scale = np.array([h - 1, w - 1, h - 1, w - 1])
     shift = np.array([0, 0, 1, 1])
-    return np.around(np.multiply(boxes, scale) + shift).astype(np.int32)
+    return np.around(np.multiply(boxes, scale) + shift)# .astype(np.int32)
