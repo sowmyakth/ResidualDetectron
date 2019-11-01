@@ -76,7 +76,7 @@ def compute_backbone_shapes(config, image_shape):
         return config.COMPUTE_BACKBONE_SHAPE(image_shape)
 
     # Currently supports ResNet only
-    assert config.BACKBONE in ["resnet41", "resnet50", "resnet101"]
+    assert config.BACKBONE in ["resnet35", "resnet41", "resnet50", "resnet101"]
     return np.array(
         [[int(math.ceil(image_shape[0] / stride)),
             int(math.ceil(image_shape[1] / stride))]
@@ -171,11 +171,11 @@ def conv_block(input_tensor, kernel_size, filters, stage, block,
 
 def resnet_graph(input_image, architecture, stage5=False, train_bn=True):
     """Build a ResNet graph.
-        architecture: Can be resnet50 or resnet101 or resnet41
+        architecture: Can be resnet50 or resnet101 or resnet41 or resnet35
         stage5: Boolean. If False, stage5 of the network is not created
         train_bn: Boolean. Train or freeze Batch Norm layers
     """
-    assert architecture in ["resnet41", "resnet50", "resnet101"]
+    assert architecture in ["resnet35", "resnet41", "resnet50", "resnet101"]
     # Stage 1
     x = KL.ZeroPadding2D((3, 3))(input_image)
     x = KL.Conv2D(64, (7, 7), strides=(2, 2), name='conv1', use_bias=True)(x)
@@ -193,7 +193,7 @@ def resnet_graph(input_image, architecture, stage5=False, train_bn=True):
     C3 = x = identity_block(x, 3, [128, 128, 512], stage=3, block='d', train_bn=train_bn)
     # Stage 4
     x = conv_block(x, 3, [256, 256, 1024], stage=4, block='a', train_bn=train_bn)
-    block_count = {"resnet41": 2, "resnet50": 5, "resnet101": 22}[architecture]
+    block_count = {"resnet35": 0, "resnet41": 2, "resnet50": 5, "resnet101": 22}[architecture]
     for i in range(block_count):
         x = identity_block(x, 3, [256, 256, 1024], stage=4, block=chr(98 + i), train_bn=train_bn)
     C4 = x
@@ -1728,7 +1728,7 @@ class MaskRCNN():
             workers = 0
         else:
             workers = multiprocessing.cpu_count()
-
+        log("\n Running precache for {} workers:\n".format(workers))
         history = self.keras_model.fit_generator(
             train_generator,
             initial_epoch=self.epoch,
@@ -1737,7 +1737,7 @@ class MaskRCNN():
             callbacks=callbacks,
             validation_data=val_generator,
             validation_steps=self.config.VALIDATION_STEPS,
-            max_queue_size=10,
+            max_queue_size=80,
             workers=workers,
             use_multiprocessing=False,
         )
