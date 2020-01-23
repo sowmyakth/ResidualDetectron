@@ -12,8 +12,9 @@ import descwl
 import matplotlib.pyplot as plt
 import astropy.table
 from mrcnn import utils
-import mrcnn.model_btk_only as model_btk
 import mrcnn.config_btk_only
+from functools import partial
+import multiprocessing
 
 
 def get_ax(rows=1, cols=1, size=4):
@@ -101,7 +102,8 @@ def get_undetected(true_cat_all, meas_cent, obs_cond,
         (true_cat_all['i_ab'] <= i_mag_lim)]
     psf_sigma = obs_cond.zenith_psf_fwhm*obs_cond.airmass**0.6
     pixel_scale = obs_cond.pixel_scale
-    peaks = np.stack([true_cat['dx'], true_cat['dy']]).T
+    peaks = np.stack(
+        [np.array(true_cat['dx']), np.array(true_cat['dy'])]).T
     if len(peaks) == 0:
         undetected = range(len(true_cat))
     else:
@@ -184,7 +186,8 @@ def resid_general_sampling_function(Args, catalog):
          catalog[np.random.choice(q, size=number_of_objects)]])
     blend_catalog['ra'], blend_catalog['dec'] = 0., 0.
     # keep number density of objects constant
-    maxshift = Args.stamp_size/30.*number_of_objects**0.5
+    #maxshift = Args.stamp_size/30.*number_of_objects**0.5
+    maxshift = Args.stamp_size/20.*number_of_objects**0.5
     dx, dy = get_random_shift(Args, number_of_objects + 1,
                               maxshift=maxshift)
     blend_catalog['ra'] += dx
@@ -295,6 +298,104 @@ def group_sampling_function(Args, catalog, min_group_size=2):
     return no_boundary[select]
 
 
+def group_sampling_function_numbered(Args, catalog):
+    """Blends are defined from *groups* of galaxies from a CatSim-like
+    catalog previously analyzed with WLD.
+
+    This function requires a parameter, group_id_count, to be input in Args
+    along with the wld_catalog which tracks the group id returned. Each time
+    the generator is called,1 gets added to the count. If the count is
+    larger than the number of groups input, the generator is forced to exit.
+
+    The group is centered on the middle of the postage stamp.
+    This function only draws galaxies whose centers lie within 1 arcsec the
+    postage stamp edge, which may cause the number of galaxies in the blend to
+    be smaller than the group size.The pre-run wld catalog must be defined as
+    Args.wld_catalog.
+
+    Note: the pre-run WLD images are not used here. We only use the pre-run
+    catalog (in i band) to identify galaxies that belong to a group.
+
+    Args:
+        Args: Class containing input parameters.
+        catalog: CatSim-like catalog from which to sample galaxies.
+
+    Returns:
+        Catalog with entries corresponding to one blend.
+    """
+    if not hasattr(Args, 'wld_catalog'):
+        raise Exception(
+            "A pre-run WLD catalog should be input as Args.wld_catalog")
+    if not hasattr(Args, 'group_id_count'):
+        raise NameError("An integer specifying index of group_id to draw must"
+                        "be input as Args.group_id_count")
+    elif not isinstance(Args.group_id_count, int):
+        raise ValueError("group_id_count must be an integer")
+    # randomly sample a group.
+    group_ids = np.unique(
+        Args.wld_catalog['grp_id'][
+            (Args.wld_catalog['grp_size'] >= 2) &
+            (Args.wld_catalog['grp_size'] <= Args.max_number)])
+    if Args.group_id_count >= len(group_ids):
+        message = "group_id_count is larger than number of groups input"
+        raise GeneratorExit(message)
+    else:
+        group_id = group_ids[Args.group_id_count]
+        Args.group_id_count += 1
+    # get all galaxies belonging to the group.
+    # make sure some group or galaxy was not repeated in wld_catalog
+    ids = np.unique(
+        Args.wld_catalog['db_id'][Args.wld_catalog['grp_id'] == group_id])
+    blend_catalog = astropy.table.vstack(
+        [catalog[catalog['galtileid'] == i] for i in ids])[:Args.max_number]
+    # Set mean x and y coordinates of the group galaxies to the center of the
+    # postage stamp.
+    blend_catalog['ra'] -= np.mean(blend_catalog['ra'])
+    blend_catalog['dec'] -= np.mean(blend_catalog['dec'])
+    # convert ra dec from degrees to arcsec
+    blend_catalog['ra'] *= 3600
+    blend_catalog['dec'] *= 3600
+    # Add small random shift so that center does not perfectly align with stamp
+    # center
+    dx, dy = btk.create_blend_generator.get_random_center_shift(
+        Args, 1, maxshift=5*Args.pixel_scale)
+    blend_catalog['ra'] += dx
+    blend_catalog['dec'] += dy
+    # make sure galaxy centers don't lie too close to edge
+    cond1 = np.abs(blend_catalog['ra']) < Args.stamp_size/2. - 1
+    cond2 = np.abs(blend_catalog['dec']) < Args.stamp_size/2. - 1
+    no_boundary = blend_catalog[cond1 & cond2]
+    message = ("Number of galaxies greater than max number of objects per"
+               f"blend. Found {len(no_boundary)}, expected <= {Args.max_number}")
+    assert len(no_boundary) <= Args.max_number, message
+    return no_boundary
+
+
+def custom_obs_condition(Args, band):
+    """Returns observing conditions from the WLD package
+    for a given survey_name and band with a small offset from
+    the default parameters.
+    Args
+        Args: Class containing parameters to generate blends
+        band: filter name to get observing conditions for.
+    Returns
+        survey: WLD survey class with observing conditions.
+    """
+    survey = descwl.survey.Survey.get_defaults(
+        survey_name=Args.survey_name,
+        filter_band=band)
+    survey['exposure_time'] += np.random.uniform(-50, 50)
+    survey['zenith_psf_fwhm'] += np.random.uniform(-0.05, 0.05)
+    return survey
+
+
+def custom_selection_function(catalog):
+    """Apply selection cuts to the input catalog"""
+    a = np.hypot(catalog['a_d'], catalog['a_b'])
+    q, = np.where((a <= 4) & (a > 0.2) & (catalog['i_ab'] <= 27))
+    return catalog[q]
+
+
 def basic_selection_function(catalog):
     """Apply selection cuts to the input catalog"""
     a = np.hypot(catalog['a_d'], catalog['a_b'])
@@ -351,6 +452,43 @@ def scarlet_initialize(images, peaks,
     return blend
 
 
+def scarlet1_initialize(images, peaks, psfs, variances, bands):
+    """ Deblend input images with scarlet
+    Args:
+        images: Numpy array of multi-band image to run scarlet on
+               [Number of bands, height, width].
+        peaks: Array of x and y coordinates of centroids of objects in
+               the image [number of sources, 2].
+        bg_rms: Background RMS value of the images [Number of bands]
+        iters: Maximum number of iterations if scarlet doesn't converge
+               (Default: 200).
+    e_rel: Relative error for convergence (Default: 0.015)
+    Returns
+        blend: scarlet.Blend object for the initialized sources
+        rejected_sources: list of sources (if any) that scarlet was
+        unable to initialize the image with.
+    """
+    model_psf = scarlet.PSF(partial(scarlet.psf.gaussian, sigma=0.8),
+                            shape=(None, 41, 41))
+    model_frame = scarlet.Frame(images.shape, psfs=model_psf, channels=bands)
+    observation = scarlet.Observation(images, psfs=scarlet.PSF(psfs),
+                                      weights=1./variances,
+                                      channels=bands).match(model_frame)
+    sources = []
+    for n, peak in enumerate(peaks):
+        result = scarlet.ExtendedSource(model_frame, (peak[1], peak[0]),
+                                        observation, symmetric=True,
+                                        monotonic=True, thresh=1,
+                                        shifting=True)
+        sed = result.sed
+        morph = result.morph
+        if np.all([s < 0 for s in sed]) or np.sum(morph) == 0:
+            raise ValueError("Incorrectly initialized")
+        sources.append(result)
+    blend = scarlet.Blend(sources, observation)
+    return blend, observation
+
+
 def scarlet_multi_initialize(images, peaks,
                              bg_rms):
     """ Initializes scarlet MultiComponentSource at locations input as
@@ -380,25 +518,65 @@ def scarlet_multi_initialize(images, peaks,
     return blend
 
 
-def scarlet_fit(images, peaks,
-                bg_rms, iters, e_rel):
+def scarlet1_multi_initialize(images, peaks, psfs, variances, bands):
+    """ Initializes scarlet MultiComponentSource at locations input as
+    peaks in the (multi-band) input images.
+    Args:
+        images: Numpy array of multi-band image to run scarlet on
+                [Number of bands, height, width].
+        peaks: Array of x and y coordinates of centroids of objects in
+               the image [number of sources, 2].
+        bg_rms: Background RMS value of the images [Number of bands]
+    Returns
+        blend: scarlet.Blend object for the initialized sources
+        rejected_sources: list of sources (if any) that scarlet was
+                          unable to initialize the image with.
+    """
+    model_psf = scarlet.PSF(partial(scarlet.psf.gaussian, sigma=0.8),
+                            shape=(None, 41, 41))
+    model_frame = scarlet.Frame(images.shape, psfs=model_psf, channels=bands)
+    observation = scarlet.Observation(images, psfs=scarlet.PSF(psfs),
+                                      weights=1./variances,
+                                      channels=bands).match(model_frame)
+    sources = []
+    for n, peak in enumerate(peaks):
+        result = scarlet.MultiComponentSource(model_frame, (peak[1], peak[0]),
+                                              observation, symmetric=True,
+                                              monotonic=True, thresh=1,
+                                              shifting=True)
+        for i in range(result.n_sources):
+            sed = result.components[i].sed
+            morph = result.components[i].morph
+            if np.all([s < 0 for s in sed]) or np.sum(morph) == 0:
+                raise ValueError("Incorrectly initialized")
+        sources.append(result)
+    blend = scarlet.Blend(sources, observation)
+    return blend, observation
+
+
+def scarlet_fit(images, peaks, psfs, variances,
+                bands, iters, e_rel, f_rel):
     """Fits a scarlet model for the input image and centers"""
+    scarlet_multi_fit = 1
     try:
-        blend = scarlet_multi_initialize(images, peaks,
-                                         bg_rms)
-        blend.fit(iters, e_rel=e_rel)
-    except (np.linalg.LinAlgError, ValueError):
-        blend = scarlet_initialize(images, peaks,
-                                   bg_rms)
+        blend, observation = scarlet1_multi_initialize(
+            images, peaks, psfs, variances, np.array(bands, dtype=str))
+        blend.fit(iters, e_rel=e_rel, f_rel=f_rel)
+    except (np.linalg.LinAlgError, ValueError) as e:
+        print("multi component initialization failed \n", e)
+        blend, observation = scarlet1_initialize(
+            images, peaks, psfs, variances, np.array(bands, dtype=str))
         try:
-            blend.fit(iters, e_rel=e_rel)
-        except(np.linalg.LinAlgError, ValueError):
-            print("scarlet did not fit")
-    return blend
+            blend.fit(iters, e_rel=e_rel, f_rel=f_rel)
+            scarlet_multi_fit = 0
+        except(np.linalg.LinAlgError, ValueError) as e:
+            print("scarlet did not fit \n", e)
+            scarlet_multi_fit = -1
+    return blend, observation, scarlet_multi_fit
 
 
 class Scarlet_resid_params(btk.measure.Measurement_params):
-    def __init__(self, iters=200, e_rel=.015,
+    def __init__(self, iters=200, e_rel=.015, f_rel=1e-6,
                  detect_centers=True, detect_coadd=False,
                  *args, **kwargs):
         super(Scarlet_resid_params, self).__init__(*args, **kwargs)
@@ -406,6 +584,7 @@ class Scarlet_resid_params(btk.measure.Measurement_params):
         self.e_rel = e_rel
         self.detect_centers = detect_centers
         self.detect_coadd = detect_coadd
+        self.f_rel = f_rel
 
     def get_centers_coadd(self, image):
         """Runs SEP on coadd of input image and returns detected centroids
@@ -440,6 +619,17 @@ class Scarlet_resid_params(btk.measure.Measurement_params):
         """Returns scarlet modeled blend  and centers for the given blend"""
         images = np.transpose(data['blend_images'][index], axes=(2, 0, 1))
         images[np.isnan(images)] = 0
+        bands = []
+        psf_stamp_size = 41
+        psfs = np.zeros((len(images), psf_stamp_size, psf_stamp_size),
+                        dtype=np.float32)
+        variances = np.zeros_like(images)
+        for i in range(len(images)):
+            bands.append(data['obs_condition'][index][i].filter_band)
+            psf, mean_sky_level = get_psf_sky(
+                data['obs_condition'][index][i], psf_stamp_size)
+            psfs[i] = psf
+            variances[i] = images[i] + mean_sky_level
         if self.detect_centers:
             if self.detect_coadd:
                 peaks = self.get_centers_coadd(images)
@@ -447,18 +637,27 @@ class Scarlet_resid_params(btk.measure.Measurement_params):
                 peaks = self.get_centers_i_band(images)
         if len(peaks) == 0:
             return {'scarlet_model': data['blend_images'][index],
-                    'scarlet_peaks': peaks}
-        bg_rms = [data['obs_condition'][index][i].mean_sky_level**0.5 for i in range(len(images))]
-        blend = scarlet_fit(images, peaks, np.array(bg_rms),
-                            self.iters, self.e_rel)
-        selected_peaks = [[src.center[1], src.center[0]]for src in blend.components]
+                    'scarlet_peaks': peaks, 'scarlet_multi_fit': 0}
+        blend, observation, sf = scarlet_fit(
+            images, peaks, psfs, variances, bands,
+            self.iters, self.e_rel, self.f_rel)
+        #selected_peaks = [[src.center[1], src.center[0]]for src in blend.components]
+        temp_model = np.zeros_like(data['blend_images'][index])
         try:
-            model = np.transpose(blend.get_model(), axes=(1, 2, 0))
+            #model = np.transpose(blend.get_model(), axes=(1, 2, 0))
+            selected_peaks = []
+            for k, component in enumerate(blend):
+                y, x = component.center
+                selected_peaks.append([x, y])
+                model = component.get_model()
+                model_ = observation.render(model)
+                temp_model += np.transpose(model_, axes=(1, 2, 0))
         except(ValueError):
             print("Unable to create scarlet model")
-            temp_model = np.zeros_like(data['blend_images'][index])
-            return {'scarlet_model': temp_model, 'scarlet_peaks': []}
-        return {'scarlet_model': model, 'scarlet_peaks': selected_peaks}
+            return {'scarlet_model': temp_model, 'scarlet_peaks': [],
+                    'scarlet_multi_fit': sf}
+        return {'scarlet_model': temp_model, 'scarlet_peaks': selected_peaks,
+                'scarlet_multi_fit': sf}
 
 
 def get_psf_sky(obs_cond, psf_stamp_size):
@@ -617,7 +816,8 @@ class Stack_iter_params(btk.measure.Measurement_params):
 
 def make_meas_generator(catalog_name, batch_size, max_number,
                         sampling_function, selection_function=None,
-                        wld_catalog_name=None, meas_params=None):
+                        wld_catalog=None, meas_params=None,
+                        obs_condition=None, multiprocess=False):
         """
         Creates the default btk.meas_generator for input catalog
         Args:
@@ -632,9 +832,10 @@ def make_meas_generator(catalog_name, batch_size, max_number,
         param = btk.config.Simulation_params(
             catalog_name, max_number=max_number, stamp_size=25.6,
             batch_size=batch_size, draw_isolated=False, seed=199)
-        if wld_catalog_name:
-            print("wld catalog provided:", wld_catalog_name)
-            param.wld_catalog_name = wld_catalog_name
+        if wld_catalog:
+            print("wld catalog provided:")
+            param.wld_catalog = wld_catalog
+            param.group_id_count = 0
         print("setting seed", param.seed)
         np.random.seed(param.seed)
         # Load input catalog
@@ -644,16 +845,23 @@ def make_meas_generator(catalog_name, batch_size, max_number,
         blend_generator = btk.create_blend_generator.generate(
             param, catalog, sampling_function)
         # Generates observing conditions
+        if obs_condition is None:
+            obs_condition = resid_obs_conditions
         observing_generator = btk.create_observing_generator.generate(
-            param, resid_obs_conditions)
+            param, obs_condition)
         # Generate images of blends in all the observing bands
         draw_blend_generator = btk.draw_blends.generate(
             param, blend_generator, observing_generator)
         if meas_params is None:
             print("Setting scarlet_resid_paramsa as meas_params")
             meas_params = Scarlet_resid_params()
+        if multiprocess:
+            cpus = multiprocessing.cpu_count()
+        else:
+            cpus = 1
         meas_generator = btk.measure.generate(
-            meas_params, draw_blend_generator, param)
+            meas_params, draw_blend_generator, param,
+            multiprocessing=multiprocess, cpus=cpus)
         return meas_generator
 
 
@@ -665,7 +873,7 @@ class ResidDataset(utils.Dataset):
 
     def __init__(self, meas_generator, norm_val=None,
                  augmentation=False, i_mag_lim=30, input_pull=False,
-                 norm_limit=None, input_model_mapping=False,
+                 norm_limit=None, input_model_mapping=False, stretch=2731,
                  *args, **kwargs):
         super(ResidDataset, self).__init__(*args, **kwargs)
         self.meas_generator = meas_generator
@@ -673,6 +881,7 @@ class ResidDataset(utils.Dataset):
         self.i_mag_lim = i_mag_lim
         self.input_pull = input_pull
         self.input_model_mapping = input_model_mapping
+        self.stretch = stretch
         if norm_val:
             self.mean1 = norm_val[0]
             self.std1 = norm_val[1]
@@ -684,6 +893,7 @@ class ResidDataset(utils.Dataset):
             self.mean2 = 63.16814480535191
             self.std2 = 2346.133101333463
         self.norm_limit = norm_limit
+        print("Input normalized with", norm_val)
 
     def load_data(self, count=None):
         """loads training and test input and output data
@@ -763,6 +973,7 @@ class ResidDataset(utils.Dataset):
         """Generates image + bbox for undetected objects if any"""
         output, deb, _ = next(self.meas_generator)
         self.batch_blend_list = output['blend_list']
+        self.scarlet_multi_fit = []
         self.obs_cond = output['obs_condition']
         input_images, input_bboxes, input_class_ids = [], [], []
         self.det_cent, self.true_cent = [], []
@@ -773,16 +984,17 @@ class ResidDataset(utils.Dataset):
             model_images[np.isnan(model_images)] = 0
             detected_centers = deb[i]['scarlet_peaks']
             self.det_cent.append(detected_centers)
-            self.true_cent.append(
-                np.stack([blend_list['dx'], blend_list['dy']]).T)
+            self.scarlet_multi_fit.append(deb[i]['scarlet_multi_fit'])
+            cent_t = [np.array(blend_list['dx']), np.array(blend_list['dy'])]
+            self.true_cent.append(np.stack(cent_t).T)
             resid_images = blend_images - model_images
             if self.input_pull:
                 bg_rms = [c.mean_sky_level for c in self.obs_cond[i]]
                 resid_images /= np.sqrt(np.array(bg_rms) + blend_images)
             if self.input_model_mapping:
-                stretch = 0.1
-                Q = 3
-                model_images = np.arcsinh(Q*model_images/stretch)/Q
+                # stretch = 2000  # 0.1
+                Q = 0.5  # 3
+                model_images = np.arcsinh(Q*model_images/self.stretch)/Q
             image = np.dstack([resid_images, model_images])
             x, y, h = get_undetected(blend_list, detected_centers,
                                      self.obs_cond[i][3], self.i_mag_lim)
@@ -844,23 +1056,30 @@ class Resid_btk_model(object):
         else:
             self.config.TRAIN_BN = False
 
-    def make_resid_model(self, catalog_name, count=256,
+    def make_resid_model(self, train_catalog_name, count=256,
                          sampling_function=None, max_number=2,
                          augmentation=False, norm_val=None,
-                         selection_function=None, wld_catalog_name=None,
+                         selection_function=None, train_wld_catalog_name=None,
                          meas_params=None, input_pull=False,
-                         input_model_mapping=False):
+                         input_model_mapping=False, obs_condition=None,
+                         val_wld_catalog_name=None, val_catalog_name=None,
+                         multiprocess=False):
         """Creates dataset and loads model"""
         # If no user input sampling function then set default function
+        import mrcnn.model_btk_only as model_btk
         if not sampling_function:
             sampling_function = resid_general_sampling_function
-        self.meas_generator = make_meas_generator(catalog_name,
+        train_wld_catalog = astropy.table.Table.read(
+            train_wld_catalog_name, format='fits')
+        self.meas_generator = make_meas_generator(train_catalog_name,
                                                   self.config.BATCH_SIZE,
                                                   max_number,
                                                   sampling_function,
                                                   selection_function,
-                                                  wld_catalog_name,
-                                                  meas_params)
+                                                  train_wld_catalog,
+                                                  meas_params,
+                                                  obs_condition,
+                                                  multiprocess)
         self.dataset = ResidDataset(self.meas_generator, norm_val=norm_val,
                                     augmentation=augmentation,
                                     input_pull=input_pull,
@@ -875,13 +1094,17 @@ class Resid_btk_model(object):
                                             config=self.config,
                                             model_dir=self.output_dir)
             if self.validation_for_training:
-                val_meas_generator = make_meas_generator(catalog_name,
+                val_wld_catalog = astropy.table.Table.read(
+                    val_wld_catalog_name, format='fits')
+                val_meas_generator = make_meas_generator(val_catalog_name,
                                                          self.config.BATCH_SIZE,
                                                          max_number,
                                                          sampling_function,
                                                          selection_function,
-                                                         wld_catalog_name,
-                                                         meas_params)
+                                                         val_wld_catalog,
+                                                         meas_params,
+                                                         obs_condition,
+                                                         multiprocess)
                 self.dataset_val = ResidDataset(
                     val_meas_generator, norm_val=norm_val,
                     input_pull=input_pull,
@@ -923,9 +1146,10 @@ class Resid_btk_model_gold(object):
                               sampling_function=None, max_number=2,
                               augmentation=False, norm_val=None,
                               selection_function=None, wld_catalog_name=None,
-                              meas_params=None):
+                              meas_params=None, multiprocess=False):
         """Creates dataset and loads model"""
         # If no user input sampling function then set default function
+        import mrcnn.model_btk_only as model_btk
         if not sampling_function:
             sampling_function = resid_general_sampling_function
         self.meas_generator = make_meas_generator(catalog_name,
@@ -1043,8 +1267,8 @@ class Stack_iter_btk_param(btk.compute_metrics.Metrics_params):
             model_image = deb[i][0]
             detected_centers = deb[i][1]
             self.det_cent.append(detected_centers)
-            self.true_cent.append(
-                np.stack([blend_list['dx'], blend_list['dy']]).T)
+            cent_t = [np.array(blend_list['dx']), np.array(blend_list['dy'])]
+            self.true_cent.append(np.stack(cent_t).T)
             resid_images = blend_image - model_image
             resid_cat = get_stack_catalog(resid_images,
                                           output['obs_condition'][i],
