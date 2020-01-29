@@ -10,6 +10,8 @@ sys.path.append('scripts')
 sys.path.append('/home/users/sowmyak/ResidualDetectron/scripts/')
 import btk_utils
 import mrcnn.model_btk_only as model_btk
+import mrcnn
+import mrcnn.config_btk_only
 
 
 MODEL_DIR = '/scratch/users/sowmyak/resid/logs_oct'
@@ -22,6 +24,259 @@ model_file_name = os.path.join(MODEL_DIR, model_file)
 model_name = '15_8'
 DATA_PATH = '/scratch/users/sowmyak/data'
 BATCH_SIZE = 1
+
+class ResidDataset(mrcnn.utils.Dataset):
+    """Generates the shapes synthetic dataset. The dataset consists of simple
+    shapes (triangles, squares, circles) placed randomly on a blank surface.
+    The images are generated on the fly. No file access required.
+    """
+
+    def __init__(self, meas_generator, norm_val=None,
+                 augmentation=False, i_mag_lim=30, input_pull=False,
+                 norm_limit=None, input_model_mapping=False, stretch=2731,
+                 *args, **kwargs):
+        super(ResidDataset, self).__init__(*args, **kwargs)
+        self.meas_generator = meas_generator
+        self.augmentation = augmentation
+        self.i_mag_lim = i_mag_lim
+        self.input_pull = input_pull
+        self.input_model_mapping = input_model_mapping
+        self.stretch = stretch
+        if norm_val:
+            self.mean1 = norm_val[0]
+            self.std1 = norm_val[1]
+            self.mean2 = norm_val[2]
+            self.std2 = norm_val[3]
+        else:
+            self.mean1 = 1.6361405416087091
+            self.std1 = 416.16687641284665
+            self.mean2 = 63.16814480535191
+            self.std2 = 2346.133101333463
+        self.norm_limit = norm_limit
+        print("Input normalized with", norm_val)
+
+    def load_data(self, count=None):
+        """loads training and test input and output data
+        Keyword Arguments:
+            filename -- Numpy file where data is saved
+        """
+        if not count:
+            count = 240
+        self.load_objects(count)
+        print("Loaded {} blends".format(count))
+
+    def load_objects(self, count):
+        """Generate the requested number of synthetic images.
+        count: number of images to generate.
+        height, width: the size of the generated images.
+        """
+        # Add classes
+        self.add_class("resid", 1, "object")
+
+        # Add images
+        # Generate random specifications of images (i.e. color and
+        # list of shapes sizes and locations). This is more compact than
+        # actual images. Images are generated on the fly in load_image().
+        for i in range(count):
+            self.add_image("resid", image_id=i, path=None,
+                           object="object")
+
+    def normalize_images(self, images):
+        images[:, :, :, 0:6] = (images[:, :, :, 0:6] - self.mean1)/self.std1
+        images[:, :, :, 6:12] = (images[:, :, :, 6:12] - self.mean2)/self.std2
+        return images
+
+    def normalize_images_with_lim(self, images):
+        """Saturate at +-lim"""
+        images[:, :, :, 0:6] = (images[:, :, :, 0:6] - self.mean1)/self.std1
+        images[:, :, :, 6:12] = (images[:, :, :, 6:12] - self.mean2)/self.std2
+        if isinstance(self.norm_limit, list):
+            assert len(self.norm_limit) == 2, "norm_limit must be None or "\
+                "2-element list"
+            images[images < self.norm_limit[0]] = self.norm_limit[0]
+            images[images > self.norm_limit[1]] = self.norm_limit[1]
+        else:
+            assert self.norm_limit is None, "norm_limit must be None or "\
+                "2-element list"
+        return images
+
+    def augment_bbox(self, bboxes, end_pixel):
+        mult_y = np.array([0, 0, 1, 1])
+        mult_x = np.array([0, 1, 0, 1])
+        h0 = (bboxes[:, 2] - bboxes[:, 0]) / 2.
+        x0 = np.mean(bboxes[:, 1::2], axis=1)
+        y0 = np.mean(bboxes[:, ::2], axis=1)
+        aug_bbox = np.zeros((4, len(bboxes), 4), dtype=np.int32)
+        for i in range(len(mult_x)):
+            new_x0 = np.abs(end_pixel*mult_x[i] - x0)
+            new_y0 = np.abs(end_pixel*mult_y[i] - y0)
+            new_x0[x0 == 0.5] = 0.5
+            new_y0[x0 == 0.5] = 0.5
+            new_bbox = np.array(
+                [new_y0 - h0, new_x0 - h0, new_y0 + h0, new_x0 + h0])
+            new_bbox = np.transpose(new_bbox, axes=(1, 0,))
+            aug_bbox[i] = new_bbox
+        assert ~np.any(np.isnan(aug_bbox)), "FOUND NAN"
+        return aug_bbox
+
+    def augment_data(self, images, bboxes, class_ids):
+        """Performs data augmentation by performing rotation and reflection"""
+        aug_image = np.stack([images[:, :, :],
+                              images[:, ::-1, :],
+                              images[::-1, :, :],
+                              images[::-1, ::-1, :]])
+        aug_bbox = self.augment_bbox(bboxes, images.shape[1] - 1)
+        aug_class = np.stack([class_ids, class_ids, class_ids, class_ids])
+        return aug_image, aug_bbox, aug_class
+
+    def load_input(self):
+        """Generates image + bbox for undetected objects if any"""
+        output, deb, _ = next(self.meas_generator)
+        self.batch_blend_list = output['blend_list']
+        self.scarlet_multi_fit = []
+        self.obs_cond = output['obs_condition']
+        input_images, input_bboxes, input_class_ids = [], [], []
+        self.det_cent, self.true_cent = [], []
+        for i in range(len(output['blend_list'])):
+            blend_images = output['blend_images'][i]
+            blend_list = output['blend_list'][i]
+            model_images = deb[i]['scarlet_model']
+            model_images[np.isnan(model_images)] = 0
+            detected_centers = deb[i]['scarlet_peaks']
+            self.det_cent.append(detected_centers)
+            self.scarlet_multi_fit.append(deb[i]['scarlet_multi_fit'])
+            cent_t = [np.array(blend_list['dx']), np.array(blend_list['dy'])]
+            self.true_cent.append(np.stack(cent_t).T)
+            resid_images = blend_images - model_images
+            if self.input_pull:
+                bg_rms = [c.mean_sky_level for c in self.obs_cond[i]]
+                resid_images /= np.sqrt(np.array(bg_rms) + blend_images)
+            if self.input_model_mapping:
+                # stretch = 2000  # 0.1
+                Q = 0.5  # 3
+                model_images = np.arcsinh(Q*model_images/self.stretch)/Q
+            image = np.dstack([resid_images, model_images])
+            x, y, h = btk_utils.get_undetected(blend_list, detected_centers,
+                                               self.obs_cond[i][3],
+                                               self.i_mag_lim)
+            bbox = np.array([y, x, y+h, x+h], dtype=np.int32).T
+            assert ~np.any(np.isnan(x)), "FOUND NAN"
+            assert ~np.any(np.isnan(y)), "FOUND NAN"
+            assert ~np.any(np.isnan(h)), "FOUND NAN"
+            assert ~np.any(np.isnan(bbox)), "FOUND NAN"
+            bbox = np.concatenate((bbox, [[0, 0, 1, 1]]))
+            class_ids = np.concatenate((np.ones(len(x), dtype=np.int32), [0]))
+            if self.augmentation:
+                image, bbox, class_ids = self.augment_data(
+                    image, bbox, class_ids)
+                input_images.extend(image)
+                input_bboxes.extend(bbox)
+                input_class_ids.extend(class_ids)
+            else:
+                input_images.append(image)
+                input_bboxes.append(bbox)
+                input_class_ids.append(class_ids)
+        input_images = np.array(input_images, dtype=np.float32)
+        input_images = self.normalize_images_with_lim(input_images)
+        assert ~np.any(np.isnan(input_images)), "FOUND NAN"
+        return input_images, input_bboxes, input_class_ids
+
+    def image_reference(self, image_id):
+        """Return the shapes data of the image."""
+        info = self.image_info[image_id]
+        if info["source"] == "resid":
+            return info["object"]
+        else:
+            super(self.__class__).image_reference(self, image_id)
+
+
+class Resid_btk_model(object):
+    def __init__(self, model_name, model_path, output_dir,
+                 training=False, images_per_gpu=1,
+                 validation_for_training=False,
+                 *args, **kwargs):
+        self.model_name = model_name
+        self.training = training
+        self.model_path = model_path
+        self.output_dir = output_dir
+        self.validation_for_training = validation_for_training
+
+        class InferenceConfig(mrcnn.config_btk_only.Config):
+            NAME = self.model_name
+            GPU_COUNT = 1
+            IMAGES_PER_GPU = images_per_gpu
+            STEPS_PER_EPOCH = 500  # 200
+            VALIDATION_STEPS = 20
+            RPN_BBOX_STD_DEV = np.array([0.1, 0.1, 0.2])
+            BBOX_STD_DEV = np.array([0.1, 0.1, 0.2])
+            DETECTION_MIN_CONFIDENCE = 0.965  # 0.95
+
+        self.config = InferenceConfig()
+        if self.training:
+            self.config.display()
+        else:
+            self.config.TRAIN_BN = False
+
+    def make_resid_model(self, catalog_name, count=256,
+                         sampling_function=None, max_number=2,
+                         augmentation=False, norm_val=None,
+                         selection_function=None, wld_catalog_name=None,
+                         meas_params=None, input_pull=False,
+                         input_model_mapping=False, obs_condition=None,
+                         val_wld_catalog_name=None, val_catalog_name=None,
+                         multiprocess=False):
+        """Creates dataset and loads model"""
+        # If no user input sampling function then set default function
+        import mrcnn.model_btk_only as model_btk
+        if not sampling_function:
+            sampling_function = btk_utils.resid_general_sampling_function
+        if wld_catalog_name:
+            train_wld_catalog = astropy.table.Table.read(
+                wld_catalog_name, format='fits')
+        else:
+            train_wld_catalog = None
+        self.meas_generator = btk_utils.make_meas_generator(
+            catalog_name, self.config.BATCH_SIZE, max_number,
+            sampling_function, selection_function, train_wld_catalog,
+            meas_params, obs_condition, multiprocess)
+        self.dataset = ResidDataset(self.meas_generator, norm_val=norm_val,
+                                    augmentation=augmentation,
+                                    input_pull=input_pull,
+                                    input_model_mapping=input_model_mapping)
+        self.dataset.load_data(count=count)
+        self.dataset.prepare()
+        if augmentation:
+            self.config.BATCH_SIZE *= 4
+            self.config.IMAGES_PER_GPU *= 4
+        if self.training:
+            self.model = model_btk.MaskRCNN(mode="training",
+                                            config=self.config,
+                                            model_dir=self.output_dir)
+            if self.validation_for_training:
+                if val_wld_catalog_name:
+                    val_wld_catalog = astropy.table.Table.read(
+                        val_wld_catalog_name, format='fits')
+                else:
+                    val_wld_catalog = None
+                val_meas_generator = btk_utils.make_meas_generator(
+                    val_catalog_name, self.config.BATCH_SIZE, max_number,
+                    sampling_function, selection_function, val_wld_catalog,
+                    meas_params, obs_condition, multiprocess)
+                self.dataset_val = ResidDataset(
+                    val_meas_generator, norm_val=norm_val,
+                    input_pull=input_pull,
+                    input_model_mapping=input_model_mapping)
+                self.dataset_val.load_data(count=count)
+                self.dataset_val.prepare()
+        else:
+            print("detection minimum confidence score:",
+                  self.config.DETECTION_MIN_CONFIDENCE)
+            self.model = model_btk.MaskRCNN(mode="inference",
+                                            config=self.config,
+                                            model_dir=self.output_dir)
+        if self.model_path:
+            print("Loading weights from ", self.model_path)
+            self.model.load_weights(self.model_path, by_name=True)
 
 
 class RD_measure_params_temp(btk.measure.Measurement_params):
@@ -281,173 +536,3 @@ class RD_group_measure_params(btk.measure.Measurement_params):
         return images
 
 
-class SEP_i_band_params(btk.measure.Measurement_params):
-    """Class to perform detection and deblending with SEP"""
-
-    def __init__(self):
-        self.detect_coadd = False
-
-    def get_deblended_images(self, data, index):
-        """Returns scarlet modeled blend  and centers for the given blend"""
-        images = np.transpose(data['blend_images'][index], axes=(2, 0, 1))
-        images[np.isnan(images)] = 0
-        if self.detect_coadd:
-            peaks = self.get_centers_coadd(images)
-        else:
-            peaks = self.get_centers_i_band(images)
-        return {'deblend_image': None, 'peaks': peaks}
-
-
-class SEP_coadd_params(btk.measure.Measurement_params):
-    """Class to perform detection and deblending with SEP"""
-
-    def __init__(self):
-        self.detect_coadd = True
-
-    def get_deblended_images(self, data, index):
-        """Returns scarlet modeled blend  and centers for the given blend"""
-        images = np.transpose(data['blend_images'][index], axes=(2, 0, 1))
-        images[np.isnan(images)] = 0
-        if self.detect_coadd:
-            peaks = self.get_centers_coadd(images)
-        else:
-            peaks = self.get_centers_i_band(images)
-        return {'deblend_image': None, 'peaks': peaks}
-
-
-class Stack_iter_i_band_measure_params(btk.measure.Measurement_params):
-    """Class to perform detection and deblending with SEP"""
-
-    def __init__(self, verbose=False):
-        self.scarlet_param = btk_utils.Stack_iter_params(detect_coadd=False)
-        self.iter_stack = btk_utils.Stack_iter_params(detect_coadd=False)
-
-    def get_deblended_images(self, data, index):
-        """Returns scarlet modeled blend  and centers for the given blend"""
-        blend_image = data['blend_images'][index]
-        scarlet_op = self.scarlet_param.get_deblended_images(data, index)
-        model_image = scarlet_op['scarlet_model']
-        blend_list = data['blend_list'][index]
-        obs_cond = data['obs_condition'][index]
-        model_image[np.isnan(model_image)] = 0
-        detected_centers = scarlet_op['scarlet_peaks']
-        self.det_cent = detected_centers
-        self.true_cent = np.stack([blend_list['dx'], blend_list['dy']]).T
-        resid_image = blend_image - model_image
-        iter_data = {'blend_images': [resid_image, ],
-                     'obs_condition': [obs_cond, ]}
-        stck_peaks = self.iter_stack.get_only_peaks(
-            iter_data, 0)
-        iter_peaks = btk_utils.stack_resid_merge_centers(self.det_cent,
-                                                         stck_peaks)
-        if len(iter_peaks) == 0:
-            iter_peaks = np.empty((0, 2))
-        return {'deblend_image': model_image, 'resid_image': resid_image,
-                'peaks': iter_peaks}
-
-
-class Stack_iter_measure_params(btk.measure.Measurement_params):
-    """Class to perform detection and deblending with SEP"""
-
-    def __init__(self, verbose=False):
-        self.scarlet_param = btk_utils.Stack_iter_params(detect_coadd=True)
-        self.iter_stack = btk_utils.Stack_iter_params(detect_coadd=True)
-
-    def get_deblended_images(self, data, index):
-        """Returns scarlet modeled blend  and centers for the given blend"""
-        blend_image = data['blend_images'][index]
-        scarlet_op = self.scarlet_param.get_deblended_images(data, index)
-        model_image = scarlet_op['scarlet_model']
-        blend_list = data['blend_list'][index]
-        obs_cond = data['obs_condition'][index]
-        model_image[np.isnan(model_image)] = 0
-        detected_centers = scarlet_op['scarlet_peaks']
-        self.det_cent = detected_centers
-        self.true_cent = np.stack([blend_list['dx'], blend_list['dy']]).T
-        resid_image = blend_image - model_image
-        iter_data = {'blend_images': [resid_image, ],
-                     'obs_condition': [obs_cond, ]}
-        stack_peaks = self.iter_stack.get_only_peaks(
-            iter_data, 0)
-        iter_peaks = btk_utils.stack_resid_merge_centers(self.det_cent,
-                                                         stack_peaks)
-        if len(iter_peaks) == 0:
-            iter_peaks = np.empty((0, 2))
-        return {'deblend_image': model_image, 'resid_image': resid_image,
-                'peaks': iter_peaks}
-
-
-class Stack_coadd_params(btk.measure.Measurement_params):
-    """Class with functions that describe how LSST science pipeline can
-    perform measurements on the input data."""
-    min_pix = 1  # Minimum size in pixels to be considered a source
-    bkg_bin_size = 32  # Binning size of the local background
-    thr_value = 5  # SNR threshold for the detection
-    psf_stamp_size = 41  # size of pstamp to draw PSF on
-    detect_coadd = True
-
-    def make_measurement(self, data, index):
-        """Perform detection, deblending and measurement on the i band image of
-        the blend for input index entry in the batch.
-
-        Args:
-            data: Dictionary with blend images, isolated object images, blend
-                catalog, and observing conditions.
-            index: Position of the blend to measure in the batch.
-
-        Returns:
-            astropy.Table of the measurement results.
-         """
-        image = data['blend_images'][index],
-        obs_cond = data['obs_condition'][index]
-        image_array, variance_array, psf_image = btk_utils.get_stack_input(
-            image, obs_cond, self.psf_stamp_size, self.detect_coadd)
-        psf_array = psf_image.astype(np.float64)
-        cat = btk.utils.run_stack(
-            image_array, variance_array, psf_array, min_pix=self.min_pix,
-            bkg_bin_size=self.bkg_bin_size, thr_value=self.thr_value)
-        cat_chldrn = cat[
-            (cat['deblend_nChild'] == 0) & (cat['base_SdssCentroid_flag'] == False)]
-        cat_chldrn = cat_chldrn.copy(deep=True)
-        return cat_chldrn.asAstropy()
-
-    def get_deblended_images(self, data=None, index=None):
-        return None
-
-
-class Stack_i_band_params(btk.measure.Measurement_params):
-    """Class with functions that describe how LSST science pipeline can
-    perform measurements on the input data."""
-    min_pix = 1  # Minimum size in pixels to be considered a source
-    bkg_bin_size = 32  # Binning size of the local background
-    thr_value = 5  # SNR threshold for the detection
-    psf_stamp_size = 41  # size of pstamp to draw PSF on
-    detect_coadd = False
-
-    def make_measurement(self, data, index):
-        """Perform detection, deblending and measurement on the i band image of
-        the blend for input index entry in the batch.
-
-        Args:
-            data: Dictionary with blend images, isolated object images, blend
-                catalog, and observing conditions.
-            index: Position of the blend to measure in the batch.
-
-        Returns:
-            astropy.Table of the measurement results.
-         """
-        image = data['blend_images'][index],
-        obs_cond = data['obs_condition'][index]
-        image_array, variance_array, psf_image = btk_utils.get_stack_input(
-            image, obs_cond, self.psf_stamp_size, self.detect_coadd)
-        psf_array = psf_image.astype(np.float64)
-        cat = btk.utils.run_stack(
-            image_array, variance_array, psf_array, min_pix=self.min_pix,
-            bkg_bin_size=self.bkg_bin_size, thr_value=self.thr_value)
-        cat_chldrn = cat[
-            (cat['deblend_nChild'] == 0) & (cat['base_SdssCentroid_flag'] == False)]
-        cat_chldrn = cat_chldrn.copy(deep=True)
-        return cat_chldrn.asAstropy()
-
-    def get_deblended_images(self, data=None, index=None):
-        return None
