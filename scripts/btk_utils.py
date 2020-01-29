@@ -767,6 +767,7 @@ class Stack_iter_params(btk.measure.Measurement_params):
     psf_stamp_size = 41
     iters = 200
     e_rel = .015
+    f_rel =
 
     def __init__(self, detect_coadd=True, *args, **kwargs):
         super(Stack_iter_params, self).__init__(*args, **kwargs)
@@ -788,6 +789,18 @@ class Stack_iter_params(btk.measure.Measurement_params):
     def get_deblended_images(self, data, index):
         """Returns scarlet modeled blend  and centers for the given blend"""
         images = np.transpose(data['blend_images'][index], axes=(2, 0, 1))
+        images[np.isnan(images)] = 0
+        bands = []
+        psf_stamp_size = 41
+        psfs = np.zeros((len(images), psf_stamp_size, psf_stamp_size),
+                        dtype=np.float32)
+        variances = np.zeros_like(images)
+        for i in range(len(images)):
+            bands.append(data['obs_condition'][index][i].filter_band)
+            psf, mean_sky_level = get_psf_sky(
+                data['obs_condition'][index][i], psf_stamp_size)
+            psfs[i] = psf
+            variances[i] = images[i] + mean_sky_level
         catalog = get_stack_catalog(data['blend_images'][index],
                                     data['obs_condition'][index],
                                     detect_coadd=self.detect_coadd,
@@ -795,26 +808,31 @@ class Stack_iter_params(btk.measure.Measurement_params):
                                     min_pix=self.min_pix,
                                     bkg_bin_size=self.bkg_bin_size,
                                     thr_value=self.thr_value)
-
         self.catalog[index] = catalog
         peaks = get_stack_centers(catalog)
         if len(peaks) == 0:
             print("Unable to create scarlet model, no peaks")
             temp_model = np.zeros_like(data['blend_images'][index])
-            return {'scarlet_model': temp_model, 'scarlet_peaks': []}
-        bg_rms = [data['obs_condition'][index][i].mean_sky_level**0.5 for i in range(len(images))]
+            return {'scarlet_model': temp_model, 'scarlet_peaks': [],
+                    'scarlet_multi_fit': 0}
         try:
-            blend = scarlet_fit(images, peaks,
-                                np.array(bg_rms), self.iters,
-                                self.e_rel)
-            selected_peaks = [[src.center[1], src.center[0]]for src in blend.components]
-            model = np.transpose(blend.get_model(), axes=(1, 2, 0))
-        except(ValueError, IndexError) as e:
-            print("Unable to create scarlet model")
-            print(e)
+            blend, observation, sf = scarlet_fit(
+                images, peaks, psfs, variances, bands,
+                self.iters, self.e_rel, self.f_rel)
             temp_model = np.zeros_like(data['blend_images'][index])
-            return {'scarlet_model': temp_model, 'scarlet_peaks': []}
-        return {'scarlet_model': model, 'scarlet_peaks': selected_peaks}
+            selected_peaks = []
+            for k, component in enumerate(blend):
+                y, x = component.center
+                selected_peaks.append([x, y])
+                model = component.get_model()
+                model_ = observation.render(model)
+                temp_model += np.transpose(model_, axes=(1, 2, 0))
+        except(ValueError):
+            print("Unable to create scarlet model")
+            return {'scarlet_model': temp_model, 'scarlet_peaks': [],
+                    'scarlet_multi_fit': sf}
+        return {'scarlet_model': temp_model, 'scarlet_peaks': selected_peaks,
+                'scarlet_multi_fit': sf}
 
     def make_measurement(self, data, index):
         """ Returns catalog from the deblending step which involved performing

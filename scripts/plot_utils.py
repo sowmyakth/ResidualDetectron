@@ -215,6 +215,29 @@ def plot_results_images(results, blend_image, val_image, val_cat, indx):
         ax.add_patch(rect)
     plt.show()
 
+def get_tru_pred_box(indx, results, val_cat, ax):
+    x0, y0 = val_cat.at[indx, 'detect_x'], val_cat.at[indx, 'detect_y']
+    h = val_cat.at[indx, 'detect_h']
+    rect = patches.Rectangle((x0, y0),
+                             h, h,
+                             fill=False, color='yellow', alpha=0.7)
+    ax = plt.gca()
+    ax.add_patch(rect)
+    for i in q:
+        if results['roi_x1'][i] < 20:
+            continue
+        houtx = results['roi_x2'][i] - results['roi_x1'][i]
+        houty = results['roi_y2'][i] - results['roi_y1'][i]
+        rect = patches.Rectangle((results['roi_x1'][i],
+                                  results['roi_y1'][i]),
+                                 houtx, houty,
+                                 fill=False, color='black', alpha=1)
+        plt.text(results['roi_x2'][i], results['roi_y2'][i],
+                 str(results['network_score'][i]),
+                 color='black', size=12)
+        ax = plt.gca()
+        ax.add_patch(rect)
+
 
 def plot_metrics_images(results, blend_image, val_image, val_cat, indx):
     q, = np.where(results['id'] == indx)
@@ -269,25 +292,7 @@ def plot_metrics_images(results, blend_image, val_image, val_cat, indx):
     plt.xlim([30, 90])
     plt.ylim([30, 90])
     plt.plot(center[1], center[0], "go", mew=1)
-    x0, y0 = val_cat.at[indx, 'detect_x'], val_cat.at[indx, 'detect_y']
-    h = val_cat.at[indx, 'detect_h']
-    rect = patches.Rectangle((x0, y0),
-                             h, h,
-                             fill=False, color='yellow', alpha=0.7)
-    ax = plt.gca()
-    ax.add_patch(rect)
-    for i in q:
-        houtx = results['roi_x2'][i] - results['roi_x1'][i]
-        houty = results['roi_x2'][i] - results['roi_y1'][i]
-        rect = patches.Rectangle((results['roi_x1'][i],
-                                  results['roi_y1'][i]),
-                                 houtx, houty,
-                                 fill=False, color='black', alpha=1)
-        plt.text(results['roi_x2'][i], results['roi_y2'][i],
-                 str(results['network_score'][i]),
-                 color='black', size=12)
-        ax = plt.gca()
-        ax.add_patch(rect)
+
     plt.show()
 
 

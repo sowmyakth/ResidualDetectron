@@ -18,7 +18,7 @@ def detection_i_band(Args):
     """Test performance for btk input blends"""
     norm = [1.9844158727667542, 413.83759806375525,
             51.2789974336363, 1038.4760551905683]
-    count = 4000  # 40000
+    count = 15#4000  # 40000
     catalog_name = os.path.join(DATA_PATH, 'OneDegSq.fits')
     # Define parameters for mrcnn model with btk here
     resid_model = btk_utils.Resid_btk_model(
@@ -37,15 +37,18 @@ def detection_i_band(Args):
             it_det, it_undet, it_spur = btk.compute_metrics.evaluate_detection(
                 iter_detected[i], true[i])
             # print(it_det, it_undet, it_spur)
-            unique_sep_detected = np.unique(sep_detected[i], axis=0)
-            sep_det, sep_undet, sep_spur = btk.compute_metrics.evaluate_detection(
-                unique_sep_detected, true[i])
+            if len(sep_detected[i]) == 0:
+                sep_det, sep_undet, sep_spur = 0, len(true[i]), 0
+            else:
+                unique_sep_det_cent = np.unique(sep_detected[i], axis=0)
+                sep_det, sep_undet, sep_spur = btk.compute_metrics.evaluate_detection(
+                        unique_sep_det_cent, true[i])
             # print(sep_det, sep_undet, sep_spur)
             results.append(
                 [len(true[i]), it_det, it_undet, it_spur, sep_det, sep_undet, sep_spur])
     arr_results = np.array(results).T
     print("Results: ", np.sum(arr_results, axis=1))
-    save_file_name = f"sep_det_results_2gal_i_band.txt"
+    save_file_name = f"sep_det_results_2gal_i_band_temp.txt"
     np.savetxt(save_file_name, arr_results)
 
 
@@ -53,7 +56,7 @@ def detection_coadd(Args):
     """Test performance for btk input blends"""
     norm = [1.9844158727667542, 413.83759806375525,
             51.2789974336363, 1038.4760551905683]
-    count = 4000  # 40000
+    count = 15#4000  # 40000
     catalog_name = os.path.join(DATA_PATH, 'OneDegSq.fits')
     # Define parameters for mrcnn model with btk here
     resid_model = btk_utils.Resid_btk_model(
@@ -72,14 +75,18 @@ def detection_coadd(Args):
             it_det, it_undet, it_spur = btk.compute_metrics.evaluate_detection(
                 iter_detected[i], true[i])
             # print(it_det, it_undet, it_spur)
-            sep_det, sep_undet, sep_spur = btk.compute_metrics.evaluate_detection(
-                sep_detected[i], true[i])
+            if len(sep_detected[i]) == 0:
+                sep_det, sep_undet, sep_spur = 0, len(true[i]), 0
+            else:
+                unique_sep_det_cent = np.unique(sep_detected[i], axis=0)
+                sep_det, sep_undet, sep_spur = btk.compute_metrics.evaluate_detection(
+                        unique_sep_det_cent, true[i])
             # print(sep_det, sep_undet, sep_spur)
             results.append(
                 [len(true[i]), it_det, it_undet, it_spur, sep_det, sep_undet, sep_spur])
     arr_results = np.array(results).T
     print("Results: ", np.sum(arr_results, axis=1))
-    save_file_name = f"sep_det_results_2gal_coadd.txt"
+    save_file_name = f"sep_det_results_2gal_coadd_temp.txt"
     np.savetxt(save_file_name, arr_results)
 
 
