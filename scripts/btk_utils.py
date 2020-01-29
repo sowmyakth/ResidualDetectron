@@ -585,11 +585,11 @@ def scarlet_fit(images, peaks, psfs, variances,
     return blend, observation, scarlet_multi_fit
 
 
-class Scarlet_resid_params(btk.measure.Measurement_params):
+class Scarlet_resid_params(obbject):
     def __init__(self, iters=200, e_rel=.015, f_rel=1e-6,
                  detect_centers=True, detect_coadd=False,
                  *args, **kwargs):
-        super(Scarlet_resid_params, self).__init__(*args, **kwargs)
+        # super(Scarlet_resid_params, self).__init__(*args, **kwargs)
         self.iters = iters
         self.e_rel = e_rel
         self.detect_centers = detect_centers
@@ -704,11 +704,13 @@ def get_stack_input(image, obs_cond, psf_stamp_size, detect_coadd):
     if detect_coadd:
         input_image = np.zeros(image.shape[0:2], dtype=np.float32)
         variance_image = np.zeros(image.shape[0:2], dtype=np.float32)
+        psf_image = np.zeros([psf_stamp_size, psf_stamp_size])
         for i in range(len(obs_cond)):
-            psf_image, mean_sky_level = get_psf_sky(obs_cond[i],
-                                                    psf_stamp_size)
+            psf, mean_sky_level = get_psf_sky(obs_cond[i],
+                                              psf_stamp_size)
             variance_image += image[:, :, i] + mean_sky_level
             input_image += image[:, :, i]
+            psf_image += psf
     else:
         i = 3  # detection in i band
         psf_image, mean_sky_level = get_psf_sky(obs_cond[i],
@@ -760,14 +762,14 @@ def get_stack_centers(catalog):
     return np.stack((ys[q], xs[q]), axis=1)
 
 
-class Stack_iter_params(btk.measure.Measurement_params):
+class Stack_iter_params(object):
     min_pix = 1
     bkg_bin_size = 32
     thr_value = 5
     psf_stamp_size = 41
     iters = 200
     e_rel = .015
-    f_rel =
+    f_rel = 1e-6
 
     def __init__(self, detect_coadd=True, *args, **kwargs):
         super(Stack_iter_params, self).__init__(*args, **kwargs)
@@ -833,13 +835,6 @@ class Stack_iter_params(btk.measure.Measurement_params):
                     'scarlet_multi_fit': sf}
         return {'scarlet_model': temp_model, 'scarlet_peaks': selected_peaks,
                 'scarlet_multi_fit': sf}
-
-    def make_measurement(self, data, index):
-        """ Returns catalog from the deblending step which involved performing
-        detection, deblending and measurement on the i band image of
-        the blend image for input index in the batch using the DM stack.
-         """
-        return self.catalog[index]
 
 
 def make_meas_generator(catalog_name, batch_size, max_number,
@@ -1251,76 +1246,3 @@ def stack_resid_merge_centers(det_cent, resid_cent,
         return resid_cent
     iter_det = np.vstack([trim_det_cent, resid_cent])
     return iter_det
-
-
-class Stack_iter_btk_param(btk.compute_metrics.Metrics_params):
-    def __init__(self, catalog_name, batch_size=1, max_number=2,
-                 sampling_function=None, selection_function=None,
-                 wld_catalog_name=None, meas_params=None, detect_coadd=False,
-                 *args, **kwargs):
-        super(Stack_iter_btk_param, self).__init__(*args, **kwargs)
-        if not sampling_function:
-            print("resid_sampling")
-            sampling_function = resid_general_sampling_function
-        self.meas_generator = make_meas_generator(
-            catalog_name, batch_size, max_number, sampling_function,
-            selection_function, wld_catalog_name, meas_params)
-        self.detect_coadd = detect_coadd
-
-    def get_resid_iter_detections(self, index):
-        """
-        Returns model detected centers and true center for data entry index.
-        Args:
-            index: Index of dataset to perform detection on.
-        Returns:
-            x and y coordinates of iteratively detected centers, centers
-            detected initially and true centers.
-        Useful for evaluating model detection performance."""
-        image, gt_bbox, gt_class_id = self.dataset.load_input()
-        true_centers = self.dataset.true_cent
-        detected_centers = self.dataset.det_cent
-        results1 = self.model.detect(image, verbose=0)
-        iter_detected_centers = []
-        for i, r1 in enumerate(results1):
-            iter_detected_centers.append(resid_merge_centers(
-                detected_centers[i], r1['rois'], center_shift=0))
-        return iter_detected_centers, detected_centers, true_centers
-
-    def get_iter_centers(self):
-        """Performs stack detection on residual image and returns detected
-        centroids."""
-        output, deb, cat = next(self.meas_generator)
-        self.output = output
-        self.deblend_output = deb
-        self.obs_cond = output['obs_condition']
-        resid_centers = []
-        self.det_cent, self.true_cent = [], []
-        for i in range(len(output['blend_list'])):
-            blend_image = output['blend_images'][i]
-            blend_list = output['blend_list'][i]
-            model_image = deb[i][0]
-            detected_centers = deb[i][1]
-            self.det_cent.append(detected_centers)
-            cent_t = [np.array(blend_list['dx']), np.array(blend_list['dy'])]
-            self.true_cent.append(np.stack(cent_t).T)
-            resid_images = blend_image - model_image
-            resid_cat = get_stack_catalog(resid_images,
-                                          output['obs_condition'][i],
-                                          detect_coadd=self.detect_coadd)
-            resid_centers.append(get_stack_centers(resid_cat))
-        return resid_centers
-
-    def get_stck_iter_detections(self, index):
-        """Returns model detected centers and true center for data entry index.
-        Args:
-            index: Index of dataset to perform detection on.
-        Returns:
-            x and y coordinates of iteratively detected centers, centers
-            detected initially and true centers.
-        Useful for evaluating model detection performance."""
-        results1 = self.get_iter_centers()
-        iter_detected_centers = []
-        for i, r1 in enumerate(results1):
-            iter_detected_centers.append(stack_resid_merge_centers(
-                self.det_cent[i], r1))
-        return iter_detected_centers

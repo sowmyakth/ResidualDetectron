@@ -283,24 +283,171 @@ class RD_group_measure_params(btk.measure.Measurement_params):
 
 class SEP_i_band_params(btk.measure.Measurement_params):
     """Class to perform detection and deblending with SEP"""
-    def get_centers(self, image):
-        """Return centers detected when object detection and photometry
-        is done on input image with SEP.
-        Args:
-            image: Image (single band) of galaxy to perform measurement on.
-        Returns:
-                centers: x and y coordinates of detected  centroids
 
-        """
-        sep = __import__('sep')
-        bkg = sep.Background(image)
-        self.catalog, self.segmentation = sep.extract(
-            image, 1.5, err=bkg.globalrms, segmentation_map=True)
-        centers = np.stack((self.catalog['x'], self.catalog['y']), axis=1)
-        return centers
+    def __init__(self):
+        self.detect_coadd = False
 
     def get_deblended_images(self, data, index):
         """Returns scarlet modeled blend  and centers for the given blend"""
-        image = np.array(data['blend_images'][index, :, :, 3])
-        peaks = self.get_centers(image)
+        images = np.transpose(data['blend_images'][index], axes=(2, 0, 1))
+        images[np.isnan(images)] = 0
+        if self.detect_coadd:
+            peaks = self.get_centers_coadd(images)
+        else:
+            peaks = self.get_centers_i_band(images)
         return {'deblend_image': None, 'peaks': peaks}
+
+
+class SEP_coadd_params(btk.measure.Measurement_params):
+    """Class to perform detection and deblending with SEP"""
+
+    def __init__(self):
+        self.detect_coadd = True
+
+    def get_deblended_images(self, data, index):
+        """Returns scarlet modeled blend  and centers for the given blend"""
+        images = np.transpose(data['blend_images'][index], axes=(2, 0, 1))
+        images[np.isnan(images)] = 0
+        if self.detect_coadd:
+            peaks = self.get_centers_coadd(images)
+        else:
+            peaks = self.get_centers_i_band(images)
+        return {'deblend_image': None, 'peaks': peaks}
+
+
+class Stack_iter_i_band_measure_params(btk.measure.Measurement_params):
+    """Class to perform detection and deblending with SEP"""
+
+    def __init__(self, verbose=False):
+        self.scarlet_param = btk_utils.Stack_iter_params(detect_coadd=False)
+        self.iter_stack = btk_utils.Stack_iter_params(detect_coadd=False)
+
+    def get_deblended_images(self, data, index):
+        """Returns scarlet modeled blend  and centers for the given blend"""
+        blend_image = data['blend_images'][index]
+        scarlet_op = self.scarlet_param.get_deblended_images(data, index)
+        model_image = scarlet_op['scarlet_model']
+        blend_list = data['blend_list'][index]
+        obs_cond = data['obs_condition'][index]
+        model_image[np.isnan(model_image)] = 0
+        detected_centers = scarlet_op['scarlet_peaks']
+        self.det_cent = detected_centers
+        self.true_cent = np.stack([blend_list['dx'], blend_list['dy']]).T
+        resid_image = blend_image - model_image
+        iter_data = {'blend_images': [resid_image, ],
+                     'obs_condition': [obs_cond, ]}
+        stck_peaks = self.iter_stack.get_only_peaks(
+            iter_data, 0)
+        iter_peaks = btk_utils.stack_resid_merge_centers(self.det_cent,
+                                                         stck_peaks)
+        if len(iter_peaks) == 0:
+            iter_peaks = np.empty((0, 2))
+        return {'deblend_image': model_image, 'resid_image': resid_image,
+                'peaks': iter_peaks}
+
+
+class Stack_iter_measure_params(btk.measure.Measurement_params):
+    """Class to perform detection and deblending with SEP"""
+
+    def __init__(self, verbose=False):
+        self.scarlet_param = btk_utils.Stack_iter_params(detect_coadd=True)
+        self.iter_stack = btk_utils.Stack_iter_params(detect_coadd=True)
+
+    def get_deblended_images(self, data, index):
+        """Returns scarlet modeled blend  and centers for the given blend"""
+        blend_image = data['blend_images'][index]
+        scarlet_op = self.scarlet_param.get_deblended_images(data, index)
+        model_image = scarlet_op['scarlet_model']
+        blend_list = data['blend_list'][index]
+        obs_cond = data['obs_condition'][index]
+        model_image[np.isnan(model_image)] = 0
+        detected_centers = scarlet_op['scarlet_peaks']
+        self.det_cent = detected_centers
+        self.true_cent = np.stack([blend_list['dx'], blend_list['dy']]).T
+        resid_image = blend_image - model_image
+        iter_data = {'blend_images': [resid_image, ],
+                     'obs_condition': [obs_cond, ]}
+        stack_peaks = self.iter_stack.get_only_peaks(
+            iter_data, 0)
+        iter_peaks = btk_utils.stack_resid_merge_centers(self.det_cent,
+                                                         stack_peaks)
+        if len(iter_peaks) == 0:
+            iter_peaks = np.empty((0, 2))
+        return {'deblend_image': model_image, 'resid_image': resid_image,
+                'peaks': iter_peaks}
+
+
+class Stack_coadd_params(btk.measure.Measurement_params):
+    """Class with functions that describe how LSST science pipeline can
+    perform measurements on the input data."""
+    min_pix = 1  # Minimum size in pixels to be considered a source
+    bkg_bin_size = 32  # Binning size of the local background
+    thr_value = 5  # SNR threshold for the detection
+    psf_stamp_size = 41  # size of pstamp to draw PSF on
+    detect_coadd = True
+
+    def make_measurement(self, data, index):
+        """Perform detection, deblending and measurement on the i band image of
+        the blend for input index entry in the batch.
+
+        Args:
+            data: Dictionary with blend images, isolated object images, blend
+                catalog, and observing conditions.
+            index: Position of the blend to measure in the batch.
+
+        Returns:
+            astropy.Table of the measurement results.
+         """
+        image = data['blend_images'][index],
+        obs_cond = data['obs_condition'][index]
+        image_array, variance_array, psf_image = btk_utils.get_stack_input(
+            image, obs_cond, self.psf_stamp_size, self.detect_coadd)
+        psf_array = psf_image.astype(np.float64)
+        cat = btk.utils.run_stack(
+            image_array, variance_array, psf_array, min_pix=self.min_pix,
+            bkg_bin_size=self.bkg_bin_size, thr_value=self.thr_value)
+        cat_chldrn = cat[
+            (cat['deblend_nChild'] == 0) & (cat['base_SdssCentroid_flag'] == False)]
+        cat_chldrn = cat_chldrn.copy(deep=True)
+        return cat_chldrn.asAstropy()
+
+    def get_deblended_images(self, data=None, index=None):
+        return None
+
+
+class Stack_i_band_params(btk.measure.Measurement_params):
+    """Class with functions that describe how LSST science pipeline can
+    perform measurements on the input data."""
+    min_pix = 1  # Minimum size in pixels to be considered a source
+    bkg_bin_size = 32  # Binning size of the local background
+    thr_value = 5  # SNR threshold for the detection
+    psf_stamp_size = 41  # size of pstamp to draw PSF on
+    detect_coadd = False
+
+    def make_measurement(self, data, index):
+        """Perform detection, deblending and measurement on the i band image of
+        the blend for input index entry in the batch.
+
+        Args:
+            data: Dictionary with blend images, isolated object images, blend
+                catalog, and observing conditions.
+            index: Position of the blend to measure in the batch.
+
+        Returns:
+            astropy.Table of the measurement results.
+         """
+        image = data['blend_images'][index],
+        obs_cond = data['obs_condition'][index]
+        image_array, variance_array, psf_image = btk_utils.get_stack_input(
+            image, obs_cond, self.psf_stamp_size, self.detect_coadd)
+        psf_array = psf_image.astype(np.float64)
+        cat = btk.utils.run_stack(
+            image_array, variance_array, psf_array, min_pix=self.min_pix,
+            bkg_bin_size=self.bkg_bin_size, thr_value=self.thr_value)
+        cat_chldrn = cat[
+            (cat['deblend_nChild'] == 0) & (cat['base_SdssCentroid_flag'] == False)]
+        cat_chldrn = cat_chldrn.copy(deep=True)
+        return cat_chldrn.asAstropy()
+
+    def get_deblended_images(self, data=None, index=None):
+        return None
