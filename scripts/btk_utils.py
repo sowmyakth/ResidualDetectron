@@ -1027,7 +1027,7 @@ class Stack_coadd_params(btk.measure.Measurement_params):
         Returns:
             astropy.Table of the measurement results.
          """
-        image = data['blend_images'][index],
+        image = data['blend_images'][index]
         obs_cond = data['obs_condition'][index]
         image_array, variance_array, psf_image = get_stack_input(
             image, obs_cond, self.psf_stamp_size, self.detect_coadd)
@@ -1065,7 +1065,7 @@ class Stack_i_band_params(btk.measure.Measurement_params):
         Returns:
             astropy.Table of the measurement results.
          """
-        image = data['blend_images'][index],
+        image = data['blend_images'][index]
         obs_cond = data['obs_condition'][index]
         image_array, variance_array, psf_image = get_stack_input(
             image, obs_cond, self.psf_stamp_size, self.detect_coadd)
