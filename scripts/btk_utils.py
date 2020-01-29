@@ -256,7 +256,7 @@ def get_wld_catalog(path):
     return wld_catalog
 
 
-def group_sampling_function(Args, catalog, min_group_size=2):
+def group_sampling_function(Args, catalog):
     """Blends are defined from *groups* of galaxies from the Cat-Sim like
     catalog previously analyzed with WLD. Function selects galaxies
     Note: the pre-run WLD images are not used here. We only use the pre-run
@@ -269,33 +269,40 @@ def group_sampling_function(Args, catalog, min_group_size=2):
     if not hasattr(Args, 'wld_catalog'):
         raise Exception(
             "A pre-run WLD catalog should be input as Args.wld_catalog")
-    else:
-        wld_catalog = Args.wld_catalog
+    # randomly sample a group.
     group_ids = np.unique(
-        wld_catalog['grp_id'][wld_catalog['grp_size'] >= min_group_size])
+        Args.wld_catalog['grp_id'][
+            (Args.wld_catalog['grp_size'] >= 2) &
+            (Args.wld_catalog['grp_size'] <= Args.max_number)])
     group_id = np.random.choice(group_ids)
-    ids = wld_catalog['db_id'][wld_catalog['grp_id'] == group_id]
+    # get all galaxies belonging to the group.
+    # make sure some group or galaxy was not repeated in wld_catalog
+    ids = np.unique(
+        Args.wld_catalog['db_id'][Args.wld_catalog['grp_id'] == group_id])
     blend_catalog = astropy.table.vstack(
-        [catalog[catalog['galtileid'] == i] for i in ids])
+        [catalog[catalog['galtileid'] == i] for i in ids])[:Args.max_number]
+    # Set mean x and y coordinates of the group galaxies to the center of the
+    # postage stamp.
     blend_catalog['ra'] -= np.mean(blend_catalog['ra'])
     blend_catalog['dec'] -= np.mean(blend_catalog['dec'])
     # convert ra dec from degrees to arcsec
     blend_catalog['ra'] *= 3600
     blend_catalog['dec'] *= 3600
-    # Add small shift so that center does not perfectly align with stamp center
-    dx, dy = get_random_shift(Args, 1, maxshift=3*Args.pixel_scale)
+    # Add small random shift so that center does not perfectly align with stamp
+    # center
+    dx, dy = btk.create_blend_generator.get_random_center_shift(
+        Args, 1, maxshift=5*Args.pixel_scale)
     blend_catalog['ra'] += dx
     blend_catalog['dec'] += dy
     # make sure galaxy centers don't lie too close to edge
-    cond1 = np.abs(blend_catalog['ra']) < Args.stamp_size/2. - 5
-    cond2 = np.abs(blend_catalog['dec']) < Args.stamp_size/2. - 5
+    cond1 = np.abs(blend_catalog['ra']) < Args.stamp_size/2. - 1
+    cond2 = np.abs(blend_catalog['dec']) < Args.stamp_size/2. - 1
     no_boundary = blend_catalog[cond1 & cond2]
-    if len(no_boundary) == 0:
-        return no_boundary
-    # make sure number of galaxies in blend is less than Args.max_number
-    num = min([len(no_boundary), Args.max_number])
-    select = np.random.choice(range(len(no_boundary)), num, replace=False)
-    return no_boundary[select]
+    message = ("Number of galaxies greater than max number of objects per"
+               f"blend. Found {len(no_boundary)}, "
+               f"expected <= {Args.max_number}")
+    assert len(no_boundary) <= Args.max_number, message
+    return no_boundary
 
 
 def group_sampling_function_numbered(Args, catalog):
@@ -323,9 +330,11 @@ def group_sampling_function_numbered(Args, catalog):
     Returns:
         Catalog with entries corresponding to one blend.
     """
-    if not hasattr(Args, 'wld_catalog'):
+    if not hasattr(Args, 'wld_catalog_name'):
         raise Exception(
-            "A pre-run WLD catalog should be input as Args.wld_catalog")
+            "A pre-run WLD catalog should be input as Args.wld_catalog_name")
+    wld_catalog = astropy.table.Table.read(
+        Args.wld_catalog_name, format='fits')
     if not hasattr(Args, 'group_id_count'):
         raise NameError("An integer specifying index of group_id to draw must"
                         "be input as Args.group_id_count")
@@ -333,11 +342,12 @@ def group_sampling_function_numbered(Args, catalog):
         raise ValueError("group_id_count must be an integer")
     # randomly sample a group.
     group_ids = np.unique(
-        Args.wld_catalog['grp_id'][
-            (Args.wld_catalog['grp_size'] >= 2) &
-            (Args.wld_catalog['grp_size'] <= Args.max_number)])
+        wld_catalog['grp_id'][
+            (wld_catalog['grp_size'] >= 2) &
+            (wld_catalog['grp_size'] <= Args.max_number)])
     if Args.group_id_count >= len(group_ids):
-        message = "group_id_count is larger than number of groups input"
+        message = (f"group_id_count:{Args.group_id_count} is larger than the"
+                   f"number of groups input {len(group_ids)}")
         raise GeneratorExit(message)
     else:
         group_id = group_ids[Args.group_id_count]
@@ -345,7 +355,7 @@ def group_sampling_function_numbered(Args, catalog):
     # get all galaxies belonging to the group.
     # make sure some group or galaxy was not repeated in wld_catalog
     ids = np.unique(
-        Args.wld_catalog['db_id'][Args.wld_catalog['grp_id'] == group_id])
+        wld_catalog['db_id'][wld_catalog['grp_id'] == group_id])
     blend_catalog = astropy.table.vstack(
         [catalog[catalog['galtileid'] == i] for i in ids])[:Args.max_number]
     # Set mean x and y coordinates of the group galaxies to the center of the
@@ -562,14 +572,14 @@ def scarlet_fit(images, peaks, psfs, variances,
         blend, observation = scarlet1_multi_initialize(
             images, peaks, psfs, variances, np.array(bands, dtype=str))
         blend.fit(iters, e_rel=e_rel, f_rel=f_rel)
-    except (np.linalg.LinAlgError, ValueError) as e:
+    except (np.linalg.LinAlgError, ValueError, ArithmeticError) as e:
         print("multi component initialization failed \n", e)
         blend, observation = scarlet1_initialize(
             images, peaks, psfs, variances, np.array(bands, dtype=str))
         try:
             blend.fit(iters, e_rel=e_rel, f_rel=f_rel)
             scarlet_multi_fit = 0
-        except(np.linalg.LinAlgError, ValueError) as e:
+        except(np.linalg.LinAlgError, ValueError, ArithmeticError) as e:
             print("scarlet did not fit \n", e)
             scarlet_multi_fit = -1
     return blend, observation, scarlet_multi_fit
@@ -856,7 +866,7 @@ def make_meas_generator(catalog_name, batch_size, max_number,
             print("Setting scarlet_resid_paramsa as meas_params")
             meas_params = Scarlet_resid_params()
         if multiprocess:
-            cpus = multiprocessing.cpu_count()
+            cpus = 4  # multiprocessing.cpu_count()
         else:
             cpus = 1
         meas_generator = btk.measure.generate(
@@ -1056,10 +1066,10 @@ class Resid_btk_model(object):
         else:
             self.config.TRAIN_BN = False
 
-    def make_resid_model(self, train_catalog_name, count=256,
+    def make_resid_model(self, catalog_name, count=256,
                          sampling_function=None, max_number=2,
                          augmentation=False, norm_val=None,
-                         selection_function=None, train_wld_catalog_name=None,
+                         selection_function=None, wld_catalog_name=None,
                          meas_params=None, input_pull=False,
                          input_model_mapping=False, obs_condition=None,
                          val_wld_catalog_name=None, val_catalog_name=None,
@@ -1069,9 +1079,12 @@ class Resid_btk_model(object):
         import mrcnn.model_btk_only as model_btk
         if not sampling_function:
             sampling_function = resid_general_sampling_function
-        train_wld_catalog = astropy.table.Table.read(
-            train_wld_catalog_name, format='fits')
-        self.meas_generator = make_meas_generator(train_catalog_name,
+        if wld_catalog_name:
+            train_wld_catalog = astropy.table.Table.read(
+                wld_catalog_name, format='fits')
+        else:
+            train_wld_catalog = None
+        self.meas_generator = make_meas_generator(catalog_name,
                                                   self.config.BATCH_SIZE,
                                                   max_number,
                                                   sampling_function,
@@ -1094,8 +1107,11 @@ class Resid_btk_model(object):
                                             config=self.config,
                                             model_dir=self.output_dir)
             if self.validation_for_training:
-                val_wld_catalog = astropy.table.Table.read(
-                    val_wld_catalog_name, format='fits')
+                if val_wld_catalog_name:
+                    val_wld_catalog = astropy.table.Table.read(
+                        val_wld_catalog_name, format='fits')
+                else:
+                    val_wld_catalog = None
                 val_meas_generator = make_meas_generator(val_catalog_name,
                                                          self.config.BATCH_SIZE,
                                                          max_number,
