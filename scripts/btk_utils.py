@@ -659,8 +659,8 @@ class Scarlet_resid_params(object):
                 model = component.get_model()
                 model_ = observation.render(model)
                 temp_model += np.transpose(model_, axes=(1, 2, 0))
-        except(ValueError):
-            print("Unable to create scarlet model")
+        except(ValueError) as e:
+            print("Unable to create scarlet model \n", e)
             return {'scarlet_model': temp_model, 'scarlet_peaks': [],
                     'scarlet_multi_fit': sf}
         return {'scarlet_model': temp_model, 'scarlet_peaks': selected_peaks,
@@ -826,8 +826,8 @@ class Stack_iter_params(object):
                 model = component.get_model()
                 model_ = observation.render(model)
                 temp_model += np.transpose(model_, axes=(1, 2, 0))
-        except(ValueError):
-            print("Unable to create scarlet model")
+        except(ValueError) as e:
+            print("Unable to create scarlet model \n", e)
             return {'scarlet_model': temp_model, 'scarlet_peaks': [],
                     'scarlet_multi_fit': sf}
         return {'scarlet_model': temp_model, 'scarlet_peaks': selected_peaks,
@@ -960,6 +960,7 @@ class Stack_iter_i_band_measure_params(btk.measure.Measurement_params):
         obs_cond = data['obs_condition'][index]
         model_image[np.isnan(model_image)] = 0
         detected_centers = scarlet_op['scarlet_peaks']
+        s_mf = scarlet_op['scarlet_multi_fit']
         self.det_cent = detected_centers
         self.true_cent = np.stack([blend_list['dx'], blend_list['dy']]).T
         resid_image = blend_image - model_image
@@ -972,7 +973,7 @@ class Stack_iter_i_band_measure_params(btk.measure.Measurement_params):
         if len(iter_peaks) == 0:
             iter_peaks = np.empty((0, 2))
         return {'deblend_image': model_image, 'resid_image': resid_image,
-                'peaks': iter_peaks}
+                'peaks': iter_peaks, 'scarlet_mf': s_mf}
 
 
 class Stack_iter_measure_params(btk.measure.Measurement_params):
@@ -991,6 +992,7 @@ class Stack_iter_measure_params(btk.measure.Measurement_params):
         obs_cond = data['obs_condition'][index]
         model_image[np.isnan(model_image)] = 0
         detected_centers = scarlet_op['scarlet_peaks']
+        s_mf = scarlet_op['scarlet_multi_fit']
         self.det_cent = detected_centers
         self.true_cent = np.stack([blend_list['dx'], blend_list['dy']]).T
         resid_image = blend_image - model_image
@@ -1003,7 +1005,7 @@ class Stack_iter_measure_params(btk.measure.Measurement_params):
         if len(iter_peaks) == 0:
             iter_peaks = np.empty((0, 2))
         return {'deblend_image': model_image, 'resid_image': resid_image,
-                'peaks': iter_peaks}
+                'peaks': iter_peaks, 'scarlet_mf': s_mf}
 
 
 class Stack_coadd_params(btk.measure.Measurement_params):
