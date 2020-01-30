@@ -4,6 +4,7 @@ import matplotlib.patches as patches
 import numpy as np
 import scarlet
 import scarlet.display
+import btk
 
 
 def plot_input(blend_image, val_image, val_cat, indx):
@@ -311,3 +312,74 @@ def plot_hist(full_cat, Y, indxs):
                     Y['detect_y'] + Y['detect_h'] / 2. - Y['scrlt_x0'])[indxs]
     plt.title('dist btwn scarlet center & undet gal/ dist btwn gal pair ')
     plt.hist(dist / Y['distance'][indxs] * 0.2, np.linspace(0.45, 1, 20))
+
+
+def plot_iter_detections(blend_images, blend_list, iter_detected_centers,
+                         detected_centers=None, limits=None,
+                         band_indices=[1, 2, 3]):
+    """Plots blend images as RGB image, sum in all bands, and RGB image with
+    centers of objects marked.
+
+    Outputs of btk draw are plotted here. Blend_list must contain true  centers
+    of the objects. If detected_centers are input, then the centers are also
+    shown in the third panel along with the true centers.
+
+    Args:
+        blend_images (array_like): Array of blend scene images to plot
+            [batch, height, width, bands].
+        blend_list (list) : List of `astropy.table.Table` with entries of true
+            objects. Length of list must be the batch size.
+        detected_centers (list, default=`None`): List of `numpy.ndarray` or
+            lists with centers of detected centers for each image in batch.
+            Length of list must be the batch size. Each list entry must be a
+            list or `numpy.ndarray` of dimensions [N, 2].
+        limits(list, default=`None`): List of start and end coordinates to
+            display image within. Note: limits are applied to both height and
+            width dimensions.
+        band_indices (list, default=[1,2,3]): list of length 3 with indices of
+            bands that are to be plotted in the RGB image.
+    """
+    batch_size = len(blend_list)
+    if len(band_indices) != 3:
+        raise ValueError("band_indices must be a list with 3 entries, not",
+                         f"{band_indices}")
+    if detected_centers is None:
+        detected_centers = [[]] * batch_size
+    if (len(detected_centers) != batch_size or
+            blend_images.shape[0] != batch_size):
+        raise ValueError(f"Length of detected_centers and length of blend_list\
+            must be equal to first dimension of blend_images, found \
+            {len(detected_centers), len(blend_list), len(blend_images)}")
+    for i in range(batch_size):
+        num = len(blend_list[i])
+        itr_num = len
+        images = np.transpose(blend_images[i],
+                              axes=(2, 0, 1))
+        blend_img_rgb = btk.plot_utils.get_rgb_image(images[band_indices])
+        _, ax = plt.subplots(1, 3, figsize=(8, 3))
+        ax[0].imshow(blend_img_rgb)
+        if limits:
+            ax[0].set_xlim(limits)
+            ax[0].set_ylim(limits)
+        ax[0].set_title("gri bands")
+        ax[0].axis('off')
+        ax[1].imshow(np.sum(blend_images[i, :, :, :], axis=2))
+        ax[1].set_title("Sum")
+        if limits:
+            ax[1].set_xlim(limits)
+            ax[1].set_ylim(limits)
+        ax[1].axis('off')
+        ax[2].imshow(blend_img_rgb)
+        iter_num = len(iter_detected_centers[i])
+        ax[2].set_title(f"{itr_num} iter detecetd")
+        for entry in blend_list[i]:
+            ax[2].plot(entry['dx'], entry['dy'], 'rx')
+        if limits:
+            ax[2].set_xlim(limits)
+            ax[2].set_ylim(limits)
+        for cent in detected_centers[i]:
+            ax[2].plot(cent[0], cent[1], 'go', fillstyle='none', ms=10, mew=2)
+        for cent in iter_detected_centers[i]:
+            ax[2].plot(cent[0], cent[1], 'yo', fillstyle='none', ms=10, mew=2)
+        ax[2].axis('off')
+    plt.show()

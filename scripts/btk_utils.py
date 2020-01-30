@@ -809,6 +809,7 @@ class Stack_iter_params(object):
                                     thr_value=self.thr_value)
         self.catalog[index] = catalog
         peaks = get_stack_centers(catalog)
+        #import ipdb;ipdb.set_trace()
         if len(peaks) == 0:
             print("Unable to create scarlet model, no peaks")
             temp_model = np.zeros_like(data['blend_images'][index])
@@ -962,7 +963,8 @@ class Stack_iter_i_band_measure_params(btk.measure.Measurement_params):
         detected_centers = scarlet_op['scarlet_peaks']
         s_mf = scarlet_op['scarlet_multi_fit']
         self.det_cent = detected_centers
-        self.true_cent = np.stack([blend_list['dx'], blend_list['dy']]).T
+        cent_t = [np.array(blend_list['dx']), np.array(blend_list['dy'])]
+        self.true_cent = np.stack(cent_t).T
         resid_image = blend_image - model_image
         iter_data = {'blend_images': [resid_image, ],
                      'obs_condition': [obs_cond, ]}
@@ -994,7 +996,8 @@ class Stack_iter_measure_params(btk.measure.Measurement_params):
         detected_centers = scarlet_op['scarlet_peaks']
         s_mf = scarlet_op['scarlet_multi_fit']
         self.det_cent = detected_centers
-        self.true_cent = np.stack([blend_list['dx'], blend_list['dy']]).T
+        cent_t = [np.array(blend_list['dx']), np.array(blend_list['dy'])]
+        self.true_cent = np.stack(cent_t).T
         resid_image = blend_image - model_image
         iter_data = {'blend_images': [resid_image, ],
                      'obs_condition': [obs_cond, ]}
