@@ -3,7 +3,6 @@ import os
 import numpy as np
 import astropy.table
 import sys
-
 sys.path.append('..')
 sys.path.append('../..')
 sys.path.append('scripts')
@@ -12,6 +11,7 @@ import btk_utils
 import mrcnn.model_btk_only as model_btk
 import mrcnn
 import mrcnn.config_btk_only
+from btk_utils import custom_obs_condition, group_sampling_function_numbered
 
 
 MODEL_DIR = '/scratch/users/sowmyak/resid/logs_oct'
@@ -535,4 +535,37 @@ class RD_group_measure_params(btk.measure.Measurement_params):
         images[:, :, 6:12] = (images[:, :, 6:12] - self.norm[2])/self.norm[3]
         return images
 
+class RD_metric_params(btk.compute_metrics.Metrics_params):
+    def __init__(self, *args, **kwargs):
+        super(RD_metric_params, self).__init__(*args, **kwargs)
+        """Class describing functions to return results of
+        detection/deblending/measurement algorithm in meas_generator. Each
+        time the algorithm is called, it is run on a batch of blends yielded
+        by the meas_generator.
+    """
 
+    def get_detections(self):
+        """Returns input blend catalog and detection catalog for
+        the detection performed.
+
+        Returns:
+            Results of the detection algorithm are returned as:
+                true_tables: List of astropy Table of the blend catalogs of the
+                    batch. Length of tables must be the batch size. x and y
+                    coordinate values must be under columns named 'dx' and 'dy'
+                    respectively, in pixels from bottom left corner as (0, 0).
+                detected_tables: List of astropy Table of output from detection
+                    algorithm. Length of tables must be the batch size. x and y
+                    coordinate values must be under columns named 'dx' and 'dy'
+                    respectively, in pixels from bottom left corner as (0, 0).
+        """
+        blend_op, deblend_op, _ = next(self.meas_generator)
+        true_tables = blend_op['blend_list']
+        detected_tables = []
+        for i in range(len(true_tables)):
+            detected_centers = deblend_op[i]['peaks']
+            detected_table = astropy.table.Table(detected_centers,
+                                                 names=['dx', 'dy'])
+            detected_table['scarlet_multi_fit'] = deblend_op[i]['scarlet_mf']
+            detected_tables.append(detected_table)
+        return true_tables, detected_tables
