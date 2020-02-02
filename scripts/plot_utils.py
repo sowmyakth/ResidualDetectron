@@ -352,7 +352,7 @@ def plot_iter_detections(blend_images, blend_list, iter_detected_centers,
             {len(detected_centers), len(blend_list), len(blend_images)}")
     for i in range(batch_size):
         num = len(blend_list[i])
-        itr_num = len
+        itr_num = len(iter_detected_centers[i])
         images = np.transpose(blend_images[i],
                               axes=(2, 0, 1))
         blend_img_rgb = btk.plot_utils.get_rgb_image(images[band_indices])
@@ -378,8 +378,88 @@ def plot_iter_detections(blend_images, blend_list, iter_detected_centers,
             ax[2].set_xlim(limits)
             ax[2].set_ylim(limits)
         for cent in detected_centers[i]:
-            ax[2].plot(cent[0], cent[1], 'go', fillstyle='none', ms=10, mew=2)
+            ax[2].plot(cent[0], cent[1], 'go', fillstyle='none',
+                       ms=8, mew=2)
         for cent in iter_detected_centers[i]:
-            ax[2].plot(cent[0], cent[1], 'yo', fillstyle='none', ms=10, mew=2)
+            ax[2].plot(cent[0], cent[1], 'yD', fillstyle='none',
+                       ms=11, mew=2)
         ax[2].axis('off')
+    plt.show()
+
+
+def plot_residual(blend_image, model_image, true_centers=None,
+                  detected_centers=None, plot_true_centers=False,
+                  plot_detected_centers=False, limits=None,
+                  band_indices=[1, 2, 3]):
+    if len(band_indices) != 3:
+        raise ValueError("band_indices must be a list with 3 entries, not",
+                         f"{band_indices}")
+    if detected_centers is None:
+        detected_centers = [[]]
+    if true_centers is None:
+        true_centers = [[]]
+    blend_image = np.transpose(blend_image, axes=(2, 0, 1))
+    blend_img_rgb = btk.plot_utils.get_rgb_image(blend_image[band_indices])
+    model_image = np.transpose(model_image, axes=(2, 0, 1))
+    model_img_rgb = btk.plot_utils.get_rgb_image(
+        model_image[band_indices],
+        normalize_with_image=blend_image[band_indices])
+    resid_image = blend_image - model_image
+    resid_img_rgb = btk.plot_utils.get_rgb_image(resid_image[band_indices])
+    _, ax = plt.subplots(1, 3, figsize=(8, 3))
+    ax[0].imshow(blend_img_rgb)
+    ax[0].set_title("Blend")
+    ax[1].imshow(model_img_rgb)
+    ax[1].set_title("Model")
+    ax[2].imshow(resid_img_rgb)
+    ax[2].set_title("Residual")
+
+    for i in range(3):
+        if limits:
+            ax[i].set_xlim(limits)
+            ax[i].set_ylim(limits)
+        ax[i].axis('off')
+    if plot_true_centers:
+        for cent in true_centers:
+            ax[0].plot(entry['dx'], entry['dy'], 'rx')
+    if plot_detected_centers:
+        for cent in detected_centers:
+            ax[0].plot(cent[0], cent[1], 'go', fillstyle='none',
+                       ms=8, mew=2)
+    plt.show()
+
+
+def plot_residual_coadd(blend_image, model_image, true_centers=None,
+                        detected_centers=None, plot_true_centers=False,
+                        plot_detected_centers=False, limits=None,
+                        band_indices=[1, 2, 3]):
+    if len(band_indices) != 3:
+        raise ValueError("band_indices must be a list with 3 entries, not",
+                         f"{band_indices}")
+    if detected_centers is None:
+        detected_centers = [[]]
+    if true_centers is None:
+        true_centers = [[]]
+    blend_image = np.sum(blend_image, axis=2)
+    model_image = np.sum(model_image, axis=2)
+    resid_image = blend_image - model_image
+    _, ax = plt.subplots(1, 3, figsize=(8, 3))
+    ax[0].imshow(blend_image)
+    ax[0].set_title("Blend")
+    ax[1].imshow(model_image)
+    ax[1].set_title("Model")
+    ax[2].imshow(resid_image)
+    ax[2].set_title("Residual")
+    for i in range(3):
+        if limits:
+            ax[i].set_xlim(limits)
+            ax[i].set_ylim(limits)
+        ax[i].axis('off')
+    if plot_true_centers:
+        for cent in true_centers:
+            ax[0].plot(entry['dx'], entry['dy'], 'rx')
+    if plot_detected_centers:
+        for cent in detected_centers:
+            ax[0].plot(cent[0], cent[1], 'go', fillstyle='none',
+                       ms=8, mew=2)
     plt.show()
