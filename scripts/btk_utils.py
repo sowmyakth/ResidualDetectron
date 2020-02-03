@@ -583,7 +583,7 @@ def scarlet_fit(images, peaks, psfs, variances,
     return blend, observation, scarlet_multi_fit
 
 
-class Scarlet_resid_params(object):
+class Scarlet_resid_params(btk.measure.Measurement_params):
     def __init__(self, iters=200, e_rel=.015, f_rel=1e-6,
                  detect_centers=True, detect_coadd=False,
                  *args, **kwargs):
@@ -838,7 +838,7 @@ class Stack_iter_params(object):
 
 def make_meas_generator(catalog_name, batch_size, max_number,
                         sampling_function, selection_function=None,
-                        wld_catalog=None, meas_params=None,
+                        wld_catalog_name=None, meas_params=None,
                         obs_condition=None, multiprocess=False):
         """
         Creates the default btk.meas_generator for input catalog
@@ -854,9 +854,9 @@ def make_meas_generator(catalog_name, batch_size, max_number,
         param = btk.config.Simulation_params(
             catalog_name, max_number=max_number, stamp_size=25.6,
             batch_size=batch_size, draw_isolated=False, seed=199)
-        if wld_catalog:
+        if wld_catalog_name:
             print("wld catalog provided:")
-            param.wld_catalog = wld_catalog
+            param.wld_catalog_name = wld_catalog_name
             param.group_id_count = 0
         print("setting seed", param.seed)
         np.random.seed(param.seed)
