@@ -10,7 +10,7 @@ sys.path.append('/home/users/sowmyak/ResidualDetectron/scripts/')
 import btk_utils
 import mrcnn.model_btk_only as model_btk
 import mrcnn
-import mrcnn.config_btk_only
+import mrcnn.config_btk_only, mrcnn.utils
 from btk_utils import custom_obs_condition, group_sampling_function_numbered
 
 
@@ -24,6 +24,7 @@ model_file_name = os.path.join(MODEL_DIR, model_file)
 model_name = '15_8'
 DATA_PATH = '/scratch/users/sowmyak/data'
 BATCH_SIZE = 1
+
 
 class ResidDataset(mrcnn.utils.Dataset):
     """Generates the shapes synthetic dataset. The dataset consists of simple
@@ -230,14 +231,14 @@ class Resid_btk_model(object):
         import mrcnn.model_btk_only as model_btk
         if not sampling_function:
             sampling_function = btk_utils.resid_general_sampling_function
-        if wld_catalog_name:
-            train_wld_catalog = astropy.table.Table.read(
-                wld_catalog_name, format='fits')
-        else:
-            train_wld_catalog = None
+        #if wld_catalog_name is None:
+        #    train_wld_catalog = astropy.table.Table.read(
+        #        wld_catalog_name, format='fits')
+        #else:
+        #    train_wld_catalog = None
         self.meas_generator = btk_utils.make_meas_generator(
             catalog_name, self.config.BATCH_SIZE, max_number,
-            sampling_function, selection_function, train_wld_catalog,
+            sampling_function, selection_function, wld_catalog_name,
             meas_params, obs_condition, multiprocess)
         self.dataset = ResidDataset(self.meas_generator, norm_val=norm_val,
                                     augmentation=augmentation,
@@ -253,14 +254,14 @@ class Resid_btk_model(object):
                                             config=self.config,
                                             model_dir=self.output_dir)
             if self.validation_for_training:
-                if val_wld_catalog_name:
-                    val_wld_catalog = astropy.table.Table.read(
-                        val_wld_catalog_name, format='fits')
-                else:
-                    val_wld_catalog = None
+                #if val_wld_catalog_name:
+                #    val_wld_catalog = astropy.table.Table.read(
+                #        val_wld_catalog_name, format='fits')
+                #else:
+                #    val_wld_catalog = None
                 val_meas_generator = btk_utils.make_meas_generator(
                     val_catalog_name, self.config.BATCH_SIZE, max_number,
-                    sampling_function, selection_function, val_wld_catalog,
+                    sampling_function, selection_function, val_wld_catalog_name,
                     meas_params, obs_condition, multiprocess)
                 self.dataset_val = ResidDataset(
                     val_meas_generator, norm_val=norm_val,
@@ -279,14 +280,18 @@ class Resid_btk_model(object):
             self.model.load_weights(self.model_path, by_name=True)
 
 
-class RD_measure_params_temp(btk.measure.Measurement_params):
+class RD_measure_params(btk.measure.Measurement_params):
     def __init__(self, model_file_name=model_file_name,
-                 model_name=model_name, verbose=False):
+                 model_name=model_name, stretch=2731,
+                 input_model_mapping=True, input_pull=True,
+                 verbose=False):
         self.model_file_name = model_file_name
         self.model_name = model_name
         self.get_model(verbose=False)
         self.scarlet_param = btk_utils.Scarlet_resid_params()
-        self.norm = [0., 1.45, 0, 1.]
+        self.norm = [0., 1., 0, 1.]
+        self.stretch = stretch
+        self.input_model_mapping = input_model_mapping
 
     def get_model(self, verbose=False):
         # catalog_name = os.path.join(DATA_PATH, 'OneDegSq.fits')
@@ -294,14 +299,25 @@ class RD_measure_params_temp(btk.measure.Measurement_params):
             self.model_name, self.model_file_name, MODEL_DIR, training=False,
             images_per_gpu=BATCH_SIZE)
         # Load parameters for dataset and load model
-        resid_model.config.WEIGHT_DECAY = 0.001
-        resid_model.config.STEPS_PER_EPOCH = 1000
-        resid_model.config.VALIDATION_STEPS = 20
         resid_model.config.TRAIN_BN = False
         resid_model.config.BACKBONE = 'resnet41'
         resid_model.config.SKIP_P2_RPN = True
         resid_model.config.BACKBONE_STRIDES = [8, 16, 32, 64]
         resid_model.config.RPN_ANCHOR_SCALES = (8, 16, 32, 64)
+        resid_model.config.WEIGHT_DECAY = 0.001
+        resid_model.config.STEPS_PER_EPOCH = 1000
+        resid_model.config.VALIDATION_STEPS = 20
+        resid_model.config.VALIDATION_STEPS = 10
+
+        sampling_function = btk_utils.group_sampling_function
+        obs_function = btk_utils.custom_obs_condition
+        selection_function = None  # btk_utils.custom_selection_function
+        layers = 'all'
+        norm = [0., 1., 0., 1.]  # [0, 1, 0, 1]
+        input_pull = True
+        input_model_mapping = True
+        max_number = 10
+
         print("Evaluate model:", self.model_name)
         resid_model.config.display()
         # resid_model.make_resid_model(catalog_name, count=BATCH_SIZE)
@@ -322,16 +338,19 @@ class RD_measure_params_temp(btk.measure.Measurement_params):
         model_image = scarlet_op['scarlet_model']
         blend_list = data['blend_list'][index]
         obs_cond = data['obs_condition'][index]
+        scarlet_multi_fit = scarlet_op['scarlet_multi_fit']
         model_image[np.isnan(model_image)] = 0
         detected_centers = scarlet_op['scarlet_peaks']
         self.det_cent = detected_centers
-        self.true_cent = np.stack([blend_list['dx'], blend_list['dy']]).T
+        cent_t = [np.array(blend_list['dx']), np.array(blend_list['dy'])]
+        self.true_cent.append(np.stack(cent_t).T)
         resid_image = blend_image - model_image
-        bg_rms = [c.mean_sky_level for c in obs_cond]
-        resid_image /= np.sqrt(np.array(bg_rms) + blend_image)
-        stretch = 2000  # 0.1
-        Q = 0.5  # 3
-        model_image = np.arcsinh(Q*model_image/stretch)/Q
+        if self.input_pull:
+            bg_rms = [c.mean_sky_level for c in self.obs_cond[i]]
+            resid_images /= np.sqrt(np.array(bg_rms) + blend_images)
+        if self.input_model_mapping:
+            Q = 0.5  # 3
+            model_images = np.arcsinh(Q*model_images/self.stretch)/Q
         image = np.dstack([resid_image, model_image])
         x, y, h = btk_utils.get_undetected(
             blend_list, detected_centers, obs_cond[3])
@@ -351,8 +370,8 @@ class RD_measure_params_temp(btk.measure.Measurement_params):
             it_det_cent = np.empty((0, 2))
         return {'deblend_image': model_image, 'resid_image': resid_image,
                 'peaks': it_det_cent, 'prediction': resid_result,
-                'target_bbox': bbox, 'target_class': class_ids
-                }
+                'target_bbox': bbox, 'target_class': class_ids,
+                'scarlet_multi_fit': scarlet_multi_fit}
 
 
 class RD_2gal_measure_params(btk.measure.Measurement_params):
@@ -534,6 +553,7 @@ class RD_group_measure_params(btk.measure.Measurement_params):
         images[:, :, 0:6] = (images[:, :, 0:6] - self.norm[0])/self.norm[1]
         images[:, :, 6:12] = (images[:, :, 6:12] - self.norm[2])/self.norm[3]
         return images
+
 
 class RD_metric_params(btk.compute_metrics.Metrics_params):
     def __init__(self, *args, **kwargs):
